@@ -1,0 +1,2409 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Space VR Scene</title>
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script>
+      AFRAME.registerComponent('cave-shell', {
+        init: function () {
+          var geometry = new THREE.IcosahedronGeometry(1, 20);
+          var sourcePositions = geometry.attributes.position;
+          var keptPositions = [];
+
+          for (var i = 0; i < sourcePositions.count; i += 3) {
+            var x = (sourcePositions.getX(i) + sourcePositions.getX(i + 1) + sourcePositions.getX(i + 2)) / 3;
+            var y = (sourcePositions.getY(i) + sourcePositions.getY(i + 1) + sourcePositions.getY(i + 2)) / 3;
+            var z = (sourcePositions.getZ(i) + sourcePositions.getZ(i + 1) + sourcePositions.getZ(i + 2)) / 3;
+            if (z < -0.82 && Math.abs(x - 0.28) < 0.16 && Math.abs(y) < 0.16) {
+              continue;
+            }
+
+            for (var vertex = 0; vertex < 3; vertex++) {
+              var index = i + vertex;
+              var vertexX = sourcePositions.getX(index);
+              var vertexY = sourcePositions.getY(index);
+              var vertexZ = sourcePositions.getZ(index);
+              var roughness = 1 +
+                0.035 * Math.sin(vertexX * 23 + vertexY * 17) *
+                Math.cos(vertexZ * 19 - vertexY * 11) +
+                0.018 * Math.sin(vertexZ * 41 + vertexX * 29);
+              keptPositions.push(
+                vertexX * roughness,
+                vertexY * roughness,
+                vertexZ * roughness
+              );
+            }
+          }
+
+          geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(keptPositions, 3));
+          geometry.computeVertexNormals();
+          var material = new THREE.MeshStandardMaterial({
+            color: '#45362d',
+            side: THREE.BackSide,
+            roughness: 1,
+            metalness: 0
+          });
+          this.el.setObject3D('mesh', new THREE.Mesh(geometry, material));
+        }
+      });
+
+      AFRAME.registerComponent('cave-rock', {
+        init: function () {
+          var geometry = new THREE.IcosahedronGeometry(1, 3);
+          var positions = geometry.attributes.position;
+          var colors = [];
+          var black = new THREE.Color('#080709');
+          var deepRed = new THREE.Color('#35080e');
+
+          for (var i = 0; i < positions.count; i++) {
+            var x = positions.getX(i);
+            var y = positions.getY(i);
+            var z = positions.getZ(i);
+            var variation = 0.5 + 0.5 *
+              Math.sin(x * 17 + y * 11 + z * 23) *
+              Math.cos(x * 9 - y * 13 + z * 7);
+            var radius = 0.84 + 0.16 *
+              Math.sin(x * 13 + z * 19) * Math.cos(y * 17);
+            positions.setXYZ(i, x * radius, y * radius, z * radius);
+            var color = black.clone().lerp(deepRed, variation * 0.75);
+            colors.push(color.r, color.g, color.b);
+          }
+
+          geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+          geometry.computeVertexNormals();
+          var material = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 0.96,
+            metalness: 0
+          });
+          this.el.setObject3D('mesh', new THREE.Mesh(geometry, material));
+        }
+      });
+
+      AFRAME.registerComponent('cave-ore-material', {
+        init: function () {
+          this.onModelLoaded = this.updateMaterials.bind(this);
+          this.el.addEventListener('model-loaded', this.onModelLoaded);
+          this.updateMaterials();
+        },
+
+        subdivideGeometry: function (source) {
+          var sourcePositions = source.attributes.position;
+          var sourceIndices = source.index;
+          var triangles = [];
+          for (var index = 0; index < (sourceIndices ? sourceIndices.count : sourcePositions.count); index += 3) {
+            var aIndex = sourceIndices ? sourceIndices.getX(index) : index;
+            var bIndex = sourceIndices ? sourceIndices.getX(index + 1) : index + 1;
+            var cIndex = sourceIndices ? sourceIndices.getX(index + 2) : index + 2;
+            triangles.push([
+              new THREE.Vector3().fromBufferAttribute(sourcePositions, aIndex),
+              new THREE.Vector3().fromBufferAttribute(sourcePositions, bIndex),
+              new THREE.Vector3().fromBufferAttribute(sourcePositions, cIndex)
+            ]);
+          }
+
+          for (var level = 0; level < 2; level++) {
+            var refined = [];
+            triangles.forEach(function (triangle) {
+              var a = triangle[0];
+              var b = triangle[1];
+              var c = triangle[2];
+              var ab = a.clone().add(b).multiplyScalar(0.5);
+              var bc = b.clone().add(c).multiplyScalar(0.5);
+              var ca = c.clone().add(a).multiplyScalar(0.5);
+              refined.push(
+                [a, ab, ca],
+                [ab, b, bc],
+                [ca, bc, c],
+                [ab, bc, ca]
+              );
+            });
+            triangles = refined;
+          }
+
+          var geometry = new THREE.BufferGeometry();
+          var positions = [];
+          var colors = [];
+          var indices = [];
+          var vertexByPosition = {};
+          var black = new THREE.Color('#100b0d');
+          var red = new THREE.Color('#55101a');
+
+          triangles.forEach(function (triangle) {
+            triangle.forEach(function (point) {
+              var key = point.x.toFixed(5) + ',' + point.y.toFixed(5) + ',' + point.z.toFixed(5);
+              var vertexIndex = vertexByPosition[key];
+              if (vertexIndex === undefined) {
+                vertexIndex = positions.length / 3;
+                vertexByPosition[key] = vertexIndex;
+                positions.push(point.x, point.y, point.z);
+                var variation = Math.sin(point.x * 17 + point.y * 11 + point.z * 23) *
+                  Math.cos(point.x * 9 - point.y * 15 + point.z * 7);
+                var mineralColor = black.clone().lerp(red, THREE.MathUtils.smoothstep(variation, -0.25, 0.8));
+                colors.push(mineralColor.r, mineralColor.g, mineralColor.b);
+              }
+              indices.push(vertexIndex);
+            });
+          });
+
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+          geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+          geometry.setIndex(indices);
+          geometry.computeVertexNormals();
+          geometry.computeBoundingSphere();
+          return geometry;
+        },
+
+        updateMaterials: function () {
+          var model = this.el.getObject3D('mesh');
+          if (!model) {
+            return;
+          }
+          var component = this;
+          model.traverse(function (object) {
+            if (!object.isMesh || object.userData.caveOreProcessed) {
+              return;
+            }
+            var materials = Array.isArray(object.material)
+              ? object.material : [object.material];
+            var whiteMaterials = materials.filter(function (material) {
+              return material.color &&
+                material.color.r > 0.85 &&
+                material.color.g > 0.85 &&
+                material.color.b > 0.85;
+            });
+            if (!whiteMaterials.length) {
+              return;
+            }
+
+            var allWhite = whiteMaterials.length === materials.length;
+            if (allWhite) {
+              object.geometry = component.subdivideGeometry(object.geometry);
+            }
+            var mineralMaterial = new THREE.MeshStandardMaterial({
+              color: '#ffffff',
+              vertexColors: true,
+              roughness: 0.94,
+              metalness: 0.06
+            });
+            object.material = Array.isArray(object.material)
+              ? materials.map(function (material) {
+                return whiteMaterials.indexOf(material) !== -1 ? mineralMaterial : material;
+              })
+              : mineralMaterial;
+            object.userData.caveOreProcessed = true;
+          });
+        },
+
+        remove: function () {
+          this.el.removeEventListener('model-loaded', this.onModelLoaded);
+        }
+      });
+
+      AFRAME.registerComponent('cave-formations', {
+        init: function () {
+          var geometry = new THREE.ConeGeometry(0.48, 1.8, 7, 5);
+          var positions = geometry.attributes.position;
+          for (var vertex = 0; vertex < positions.count; vertex++) {
+            var x = positions.getX(vertex);
+            var y = positions.getY(vertex);
+            var z = positions.getZ(vertex);
+            var angle = Math.atan2(z, x);
+            var roughness = 1 +
+              0.09 * Math.sin(angle * 3 + y * 4) +
+              0.045 * Math.cos(angle * 5 - y * 7);
+            positions.setXYZ(vertex, x * roughness, y, z * roughness);
+          }
+          geometry.computeVertexNormals();
+          var material = new THREE.MeshStandardMaterial({
+            color: '#55483e',
+            roughness: 0.96,
+            metalness: 0.02,
+            flatShading: true
+          });
+          var group = new THREE.Group();
+          var stalactites = [
+            [-8, -6.5, 1.8], [-4.3, -8.5, 1.3], [4.1, -7, 1.7], [8, -9.5, 2],
+            [-7.7, -13.5, 1.5], [7.6, -15.5, 1.8], [-8.2, -18.5, 1.3], [8.4, -19.5, 1.6]
+          ];
+          var stalagmites = [
+            [-8.3, -8, 1.15], [8.2, -7, 0.9], [-7.8, -12, 1.35], [8, -13, 1.1],
+            [-8.4, -17, 0.95], [8.3, -18, 1.3]
+          ];
+
+          stalactites.forEach(function (formation) {
+            var height = formation[2];
+            var mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(formation[0], 6.8 - height / 2, formation[1]);
+            mesh.rotation.x = Math.PI;
+            mesh.scale.set(0.8, height / 1.8, 0.8);
+            mesh.castShadow = true;
+            group.add(mesh);
+          });
+          stalagmites.forEach(function (formation) {
+            var height = formation[2];
+            var mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(formation[0], height / 2 - 0.12, formation[1]);
+            mesh.scale.set(0.85, height / 1.8, 0.85);
+            mesh.castShadow = true;
+            group.add(mesh);
+          });
+          this.el.setObject3D('mesh', group);
+        }
+      });
+
+      AFRAME.registerComponent('cave-exit-seal', {
+        init: function () {
+          var shape = new THREE.Shape();
+          shape.absarc(0, 0, 3.2, 0, Math.PI * 2, false);
+          var opening = new THREE.Path();
+          opening.absarc(0, 0, 1.85, 0, Math.PI * 2, true);
+          shape.holes.push(opening);
+
+          var geometry = new THREE.ExtrudeGeometry(shape, {
+            depth: 0.55,
+            bevelEnabled: true,
+            bevelThickness: 0.08,
+            bevelSize: 0.06,
+            bevelSegments: 2,
+            curveSegments: 40
+          });
+          var positions = geometry.attributes.position;
+          for (var vertex = 0; vertex < positions.count; vertex++) {
+            var x = positions.getX(vertex);
+            var y = positions.getY(vertex);
+            var z = positions.getZ(vertex);
+            var angle = Math.atan2(y, x);
+            var roughness = 1 +
+              0.018 * Math.sin(angle * 11) +
+              0.012 * Math.cos(angle * 17 + 0.6);
+            positions.setXYZ(vertex, x * roughness, y * roughness,
+              z + 0.025 * Math.sin(angle * 13 + z * 9));
+          }
+          geometry.computeVertexNormals();
+
+          var material = new THREE.MeshStandardMaterial({
+            color: '#45362d',
+            side: THREE.DoubleSide,
+            roughness: 1,
+            metalness: 0
+          });
+          this.el.setObject3D('mesh', new THREE.Mesh(geometry, material));
+        }
+      });
+
+      AFRAME.registerComponent('mine-hallway', {
+        init: function () {
+          var path = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(3.4, 1.7, -23.3),
+            new THREE.Vector3(3.4, 1.7, -25.5),
+            new THREE.Vector3(3.4, 1.7, -28.2),
+            new THREE.Vector3(3.1, 1.7, -29.8),
+            new THREE.Vector3(1.7, 1.7, -31.1),
+            new THREE.Vector3(0, 1.7, -32.5),
+            new THREE.Vector3(0, 1.7, -36),
+            new THREE.Vector3(0, 1.7, -40),
+            new THREE.Vector3(0, 1.7, -44)
+          ]);
+          this.path = path;
+          var geometry = new THREE.TubeGeometry(path, 128, 1.85, 28, false);
+          var positions = geometry.attributes.position;
+          var normals = geometry.attributes.normal;
+
+          for (var vertex = 0; vertex < positions.count; vertex++) {
+            var x = positions.getX(vertex);
+            var y = positions.getY(vertex);
+            var z = positions.getZ(vertex);
+            var normalX = normals.getX(vertex);
+            var normalY = normals.getY(vertex);
+            var normalZ = normals.getZ(vertex);
+            var roughness = 1 +
+              0.035 * Math.sin(x * 23 + y * 17) * Math.cos(z * 19 - y * 11) +
+              0.018 * Math.sin(z * 41 + x * 29);
+            var radialOffset = (roughness - 1) * 1.85;
+            positions.setXYZ(
+              vertex,
+              x + normalX * radialOffset,
+              y + normalY * radialOffset,
+              z + normalZ * radialOffset
+            );
+          }
+          geometry.computeVertexNormals();
+          var material = new THREE.MeshStandardMaterial({
+            color: '#45362d',
+            side: THREE.BackSide,
+            roughness: 1,
+            metalness: 0
+          });
+          this.el.setObject3D('mesh', new THREE.Mesh(geometry, material));
+        }
+      });
+
+      AFRAME.registerComponent('grass-field', {
+        init: function () {
+          var positions = [];
+          var colors = [];
+          var hallway = this.el.sceneEl.querySelector('[mine-hallway]');
+          hallway.object3D.updateMatrixWorld(true);
+          this.el.object3D.updateMatrixWorld(true);
+          var hallwayPath = hallway.components['mine-hallway'].path;
+          var hallwaySamples = [];
+          for (var sample = 0; sample <= 72; sample++) {
+            var hallwayPoint = hallwayPath.getPointAt(sample / 72);
+            hallway.object3D.localToWorld(hallwayPoint);
+            this.el.object3D.worldToLocal(hallwayPoint);
+            hallwaySamples.push(hallwayPoint);
+          }
+          var seed = 41;
+          var random = function () {
+            seed = (seed * 16807) % 2147483647;
+            return (seed - 1) / 2147483646;
+          };
+
+          for (var blade = 0; blade < 900; blade++) {
+            var x = (random() - 0.5) * 34;
+            var z = random() * 23 - 17;
+            var nearHallway = false;
+            for (var sampleIndex = 0; sampleIndex < hallwaySamples.length; sampleIndex++) {
+              var dx = x - hallwaySamples[sampleIndex].x;
+              var dz = z - hallwaySamples[sampleIndex].z;
+              if (dx * dx + dz * dz < 2.2 * 2.2) {
+                nearHallway = true;
+                break;
+              }
+            }
+            if (nearHallway) {
+              continue;
+            }
+
+            var height = 0.16 + random() * 0.42;
+            var halfWidth = 0.012 + random() * 0.018;
+            var lean = (random() - 0.5) * 0.18;
+            var baseColor = 0.48 + random() * 0.35;
+            var verts = [
+              [x - halfWidth, 0, z],
+              [x + halfWidth, 0, z],
+              [x + lean, height, z + lean],
+              [x, 0, z - halfWidth],
+              [x, 0, z + halfWidth],
+              [x + lean, height, z + lean]
+            ];
+
+            for (var vertex = 0; vertex < verts.length; vertex++) {
+              positions.push(verts[vertex][0], verts[vertex][1], verts[vertex][2]);
+              colors.push(baseColor * 0.58, baseColor, baseColor * 0.42);
+            }
+          }
+
+          var geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+          geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+          geometry.computeVertexNormals();
+          var material = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            roughness: 1
+          });
+          this.el.setObject3D('mesh', new THREE.Mesh(geometry, material));
+        }
+      });
+
+      AFRAME.registerComponent('garden-tree', {
+        init: function () {
+          var group = new THREE.Group();
+          var trunkMaterial = new THREE.MeshStandardMaterial({color: '#493324', roughness: 0.95});
+          var leafMaterials = [
+            new THREE.MeshStandardMaterial({color: '#285b37', roughness: 0.92}),
+            new THREE.MeshStandardMaterial({color: '#397446', roughness: 0.92}),
+            new THREE.MeshStandardMaterial({color: '#527f49', roughness: 0.92})
+          ];
+          var trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.25, 2.8, 8), trunkMaterial);
+          trunk.position.y = 1.4;
+          group.add(trunk);
+
+          var canopyLayers = [
+            {radius: 1.22, y: 2.55, scale: [1, 0.95, 0.9]},
+            {radius: 0.98, y: 3.35, scale: [1.05, 0.9, 0.95]},
+            {radius: 0.72, y: 4.05, scale: [1, 1, 0.9]}
+          ];
+          for (var i = 0; i < canopyLayers.length; i++) {
+            var layer = canopyLayers[i];
+            var canopy = new THREE.Mesh(
+              new THREE.SphereGeometry(layer.radius, 12, 9),
+              leafMaterials[i]
+            );
+            canopy.position.y = layer.y;
+            canopy.scale.set(layer.scale[0], layer.scale[1], layer.scale[2]);
+            canopy.castShadow = true;
+            group.add(canopy);
+          }
+
+          var sideLeaves = [
+            {x: -0.62, y: 2.85, z: 0.18},
+            {x: 0.58, y: 3.12, z: -0.12},
+            {x: -0.22, y: 3.65, z: -0.52}
+          ];
+          for (var leaf = 0; leaf < sideLeaves.length; leaf++) {
+            var cluster = new THREE.Mesh(
+              new THREE.SphereGeometry(0.72, 10, 8),
+              leafMaterials[(leaf + 1) % leafMaterials.length]
+            );
+            cluster.position.set(sideLeaves[leaf].x, sideLeaves[leaf].y, sideLeaves[leaf].z);
+            cluster.scale.set(1, 0.86, 0.9);
+            cluster.castShadow = true;
+            group.add(cluster);
+          }
+          group.children[0].castShadow = true;
+          this.el.setObject3D('mesh', group);
+        }
+      });
+
+      AFRAME.registerComponent('surface-trees', {
+        init: function () {
+          var placements = [
+            [-52,-0.12,-18,0.9,0.9,0.9],[57,-0.12,-34,1.05,1,1.05],
+            [-66,-0.12,-55,1.1,1.05,1.1],[50,-0.12,-76,0.85,0.9,0.85],
+            [72,-0.12,-104,1.15,1.1,1.15],[-55,-0.12,-115,1,1.05,1.05],
+            [-78,-0.12,-151,1.15,1.1,1.15],[58,-0.12,-163,0.95,1,0.95],
+            [76,-0.12,-201,1.2,1.15,1.2],[-58,-0.12,-215,0.95,0.9,0.95],
+            [-72,-0.12,-257,1.1,1.05,1.1],[54,-0.12,-264,1,1.05,1],
+            [-96,-0.12,8,1.05,1,1.05],[88,-0.12,4,0.9,0.95,0.9],
+            [108,-0.12,-24,1.15,1.1,1.15],[-84,-0.12,-39,0.95,1,0.95],
+            [92,-0.12,-62,1.1,1.05,1.1],[-112,-0.12,-82,1.2,1.15,1.2],
+            [116,-0.12,-96,0.9,0.95,0.9],[-94,-0.12,-128,1.05,1,1.05],
+            [102,-0.12,-139,1.15,1.1,1.15],[-116,-0.12,-176,0.95,1,0.95],
+            [94,-0.12,-188,1.05,1,1.05],[-98,-0.12,-231,1.15,1.1,1.15],
+            [112,-0.12,-235,1,1.05,1],[-120,-0.12,-276,0.95,1,0.95],
+            [96,-0.12,-280,1.15,1.1,1.15]
+          ];
+          placements.forEach(function (placement) {
+            var tree = document.createElement('a-entity');
+            tree.setAttribute('garden-tree', '');
+            tree.setAttribute('position', placement.slice(0, 3).join(' '));
+            tree.setAttribute('scale', placement.slice(3).join(' '));
+            this.el.appendChild(tree);
+          }, this);
+        }
+      });
+
+      AFRAME.registerComponent('emporium-lighting', {
+        init: function () {
+          this.el.sceneEl.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        }
+      });
+
+      AFRAME.registerComponent('haemanthus', {
+        init: function () {
+          var group = new THREE.Group();
+          var stemMaterial = new THREE.MeshStandardMaterial({color: '#315b32', roughness: 0.9});
+          var leafMaterial = new THREE.MeshStandardMaterial({color: '#487a3b', roughness: 0.84});
+          var flowerMaterial = new THREE.MeshStandardMaterial({
+            color: '#bd1027',
+            emissive: '#31030a',
+            roughness: 0.72
+          });
+          var stem = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, 0.72, 7), stemMaterial);
+          stem.position.y = 0.36;
+          group.add(stem);
+
+          for (var leaf = 0; leaf < 3; leaf++) {
+            var blade = new THREE.Mesh(
+              new THREE.SphereGeometry(0.42, 10, 7),
+              leafMaterial
+            );
+            blade.position.set((leaf - 1) * 0.16, 0.18, leaf % 2 ? 0.08 : -0.06);
+            blade.rotation.z = (leaf - 1) * -0.34;
+            blade.scale.set(0.27, 0.8, 0.09);
+            group.add(blade);
+          }
+
+          var bloom = new THREE.Group();
+          bloom.position.y = 0.77;
+          var center = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 9), flowerMaterial);
+          bloom.add(center);
+          var filamentGeometry = new THREE.CylinderGeometry(0.006, 0.012, 0.25, 4);
+          for (var filament = 0; filament < 32; filament++) {
+            var angle = filament * 2.399963229728653;
+            var height = 0.12 + 0.16 * ((filament % 5) / 4);
+            var radial = 0.13 + 0.1 * ((filament % 4) / 3);
+            var direction = new THREE.Vector3(
+              Math.cos(angle) * radial,
+              height,
+              Math.sin(angle) * radial
+            ).normalize();
+            var stalk = new THREE.Mesh(filamentGeometry, flowerMaterial);
+            stalk.position.copy(direction).multiplyScalar(0.14);
+            stalk.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+            bloom.add(stalk);
+          }
+          group.add(bloom);
+          this.el.setObject3D('mesh', group);
+        }
+      });
+
+      AFRAME.registerComponent('garden-girl', {
+        init: function () {
+          var group = new THREE.Group();
+          var skin = new THREE.MeshStandardMaterial({color: '#edc0a3', roughness: 0.72});
+          var hair = new THREE.MeshStandardMaterial({
+            color: '#a91f27',
+            emissive: '#26060a',
+            roughness: 0.58
+          });
+          var hairHighlight = new THREE.MeshStandardMaterial({color: '#dc583d', roughness: 0.56});
+          var gown = new THREE.MeshStandardMaterial({
+            color: '#35101c',
+            roughness: 0.68,
+            metalness: 0.08
+          });
+          var gownHighlight = new THREE.MeshStandardMaterial({color: '#5d1828', roughness: 0.62});
+          var gold = new THREE.MeshStandardMaterial({
+            color: '#d7ae5e',
+            metalness: 0.76,
+            roughness: 0.27
+          });
+          var eyeWhite = new THREE.MeshStandardMaterial({color: '#f3e7dd', roughness: 0.38});
+          var iris = new THREE.MeshStandardMaterial({color: '#55745d', roughness: 0.35});
+          var pupil = new THREE.MeshStandardMaterial({color: '#211814', roughness: 0.28});
+          var lip = new THREE.MeshStandardMaterial({color: '#874746', roughness: 0.58});
+          var addMesh = function (geometry, material, x, y, z, sx, sy, sz) {
+            var mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, z);
+            mesh.scale.set(sx, sy, sz);
+            group.add(mesh);
+            return mesh;
+          };
+
+          var skirt = new THREE.LatheGeometry([
+            new THREE.Vector2(0.06, 0.08),
+            new THREE.Vector2(0.47, 0.14),
+            new THREE.Vector2(0.56, 0.28),
+            new THREE.Vector2(0.48, 0.55),
+            new THREE.Vector2(0.39, 0.92),
+            new THREE.Vector2(0.31, 1.3),
+            new THREE.Vector2(0.29, 1.48)
+          ], 32);
+          addMesh(skirt, gown, 0, 0, 0, 1, 1, 0.78);
+          addMesh(new THREE.LatheGeometry([
+            new THREE.Vector2(0.27, 1.32),
+            new THREE.Vector2(0.34, 1.48),
+            new THREE.Vector2(0.26, 1.65),
+            new THREE.Vector2(0.17, 1.75)
+          ], 24), gown, 0, 0, 0, 1, 1, 0.75);
+          addMesh(new THREE.SphereGeometry(0.32, 18, 12), skin, 0, 1.67, 0, 1.1, 0.46, 0.76);
+          addMesh(new THREE.CylinderGeometry(0.095, 0.105, 0.22, 12), skin, 0, 1.83, 0.015, 1, 1, 1);
+          addMesh(new THREE.SphereGeometry(0.225, 24, 18), skin, 0, 2.08, 0.025, 0.83, 1.08, 0.74);
+
+          for (var eyeSide = -1; eyeSide <= 1; eyeSide += 2) {
+            addMesh(new THREE.SphereGeometry(0.041, 12, 8), eyeWhite, eyeSide * 0.084, 2.12, 0.188, 1.1, 0.77, 0.42);
+            addMesh(new THREE.SphereGeometry(0.023, 10, 7), iris, eyeSide * 0.084, 2.12, 0.207, 1, 1, 0.45);
+            addMesh(new THREE.SphereGeometry(0.012, 8, 6), pupil, eyeSide * 0.084, 2.12, 0.216, 1, 1, 0.4);
+            addMesh(new THREE.SphereGeometry(0.058, 10, 6), skin, eyeSide * 0.144, 1.98, 0.105, 0.8, 0.5, 0.6);
+            var brow = addMesh(new THREE.TorusGeometry(0.055, 0.011, 5, 12, Math.PI), hair, eyeSide * 0.083, 2.17, 0.185, 1.35, 0.75, 0.7);
+            brow.rotation.z = Math.PI;
+          }
+          addMesh(new THREE.SphereGeometry(0.031, 10, 7), skin, 0, 2.035, 0.215, 0.76, 1.2, 0.6);
+          addMesh(new THREE.SphereGeometry(0.075, 12, 8), lip, 0, 1.94, 0.196, 0.82, 0.3, 0.45);
+
+          var choker = new THREE.Mesh(new THREE.TorusGeometry(0.113, 0.022, 7, 24), gold);
+          choker.position.set(0, 1.88, 0.015);
+          choker.rotation.x = Math.PI / 2;
+          group.add(choker);
+          for (var pendant = -2; pendant <= 2; pendant++) {
+            addMesh(new THREE.SphereGeometry(0.019, 7, 5), gold, pendant * 0.045, 1.856, 0.112, 1, 1, 0.65);
+          }
+
+          addMesh(new THREE.SphereGeometry(0.31, 18, 14), hair, 0, 2.19, -0.065, 0.9, 0.56, 0.83);
+          addMesh(new THREE.SphereGeometry(0.21, 14, 10), hairHighlight, -0.06, 2.23, 0.085, 0.76, 0.54, 0.52);
+          addMesh(new THREE.SphereGeometry(0.16, 12, 9), hair, 0.115, 2.2, 0.12, 0.68, 0.58, 0.55);
+
+          for (var lock = 0; lock < 18; lock++) {
+            var angle = lock * Math.PI * 2 / 18;
+            if (Math.sin(angle) > 0.72 && Math.abs(Math.cos(angle)) < 0.55) {
+              continue;
+            }
+            var radius = 0.2 + 0.04 * Math.sin(lock * 2.3);
+            var drift = (Math.sin(lock * 5.1) * 0.13) + Math.cos(angle) * 0.18;
+            var frontOffset = Math.sin(angle) * radius;
+            var backOffset = Math.sin(angle) * 0.14;
+            var wave = new THREE.CatmullRomCurve3([
+              new THREE.Vector3(Math.cos(angle) * radius, 2.28, backOffset),
+              new THREE.Vector3(Math.cos(angle) * (radius + 0.1) + drift, 1.98, frontOffset),
+              new THREE.Vector3(Math.cos(angle) * (radius + 0.12) - drift, 1.58, frontOffset * 0.72),
+              new THREE.Vector3(Math.cos(angle) * (radius + 0.22) + drift * 0.55, 1.12, frontOffset * 0.42),
+              new THREE.Vector3(Math.cos(angle) * (radius + 0.12), 0.72 + (lock % 4) * 0.07, -0.025)
+            ]);
+            var lockMaterial = lock % 4 === 0 ? hairHighlight : hair;
+            group.add(new THREE.Mesh(
+              new THREE.TubeGeometry(wave, 22, lock % 3 === 0 ? 0.06 : 0.045, 7, false),
+              lockMaterial
+            ));
+          }
+
+          for (var fold = 0; fold < 10; fold++) {
+            var foldAngle = fold * Math.PI * 2 / 10;
+            var foldCurve = new THREE.CatmullRomCurve3([
+              new THREE.Vector3(Math.cos(foldAngle) * 0.22, 1.38, Math.sin(foldAngle) * 0.16),
+              new THREE.Vector3(Math.cos(foldAngle + 0.08) * 0.33, 0.93, Math.sin(foldAngle + 0.08) * 0.2),
+              new THREE.Vector3(Math.cos(foldAngle + 0.18) * 0.48, 0.4, Math.sin(foldAngle + 0.18) * 0.31),
+              new THREE.Vector3(Math.cos(foldAngle + 0.23) * 0.53, 0.12, Math.sin(foldAngle + 0.23) * 0.4)
+            ]);
+            group.add(new THREE.Mesh(
+              new THREE.TubeGeometry(foldCurve, 14, 0.012, 4, false),
+              gownHighlight
+            ));
+          }
+
+          for (var arm = 0; arm < 2; arm++) {
+            var side = arm ? 1 : -1;
+            var upperArm = addMesh(new THREE.CylinderGeometry(0.075, 0.095, 0.46, 12), skin, side * 0.32, 1.52, 0, 1, 1, 1);
+            upperArm.rotation.z = side * -0.35;
+            var sleeve = addMesh(new THREE.CylinderGeometry(0.08, 0.11, 0.56, 12), gown, side * 0.4, 1.12, 0, 1, 1, 1);
+            sleeve.rotation.z = side * -0.22;
+            addMesh(new THREE.SphereGeometry(0.075, 10, 8), skin, side * 0.46, 0.8, 0.04, 1, 1, 1);
+            var cuff = addMesh(new THREE.TorusGeometry(0.083, 0.012, 5, 16), gold, side * 0.45, 0.86, 0.04, 1, 1, 1);
+            cuff.rotation.x = Math.PI / 2;
+          }
+          this.el.setObject3D('mesh', group);
+        }
+      });
+
+      var characterModelCache = {};
+      AFRAME.registerComponent('obj-character', {
+        schema: {
+          src: {type: 'string'},
+          palette: {type: 'string', default: 'eo'}
+        },
+
+        init: function () {
+          var cacheKey = this.data.src + '|' + this.data.palette;
+          if (!characterModelCache[cacheKey]) {
+            characterModelCache[cacheKey] = fetch(this.data.src)
+              .then(function (response) {
+                if (!response.ok) {
+                  throw new Error('Unable to load character model: ' + response.status);
+                }
+                return response.text();
+              })
+              .then(this.createModel.bind(this))
+              .catch(function (error) {
+                delete characterModelCache[cacheKey];
+                throw error;
+              });
+          }
+
+          characterModelCache[cacheKey]
+            .then(function (modelData) {
+              var model = new THREE.Mesh(modelData.geometry, modelData.material);
+              if (this.data.palette === 'haemanthus') {
+                model.scale.setScalar(0.45);
+              }
+              model.castShadow = this.data.palette !== 'haemanthus';
+              model.receiveShadow = true;
+              this.el.setObject3D('mesh', model);
+            }.bind(this))
+            .catch(function (error) {
+              console.error(error);
+            });
+        },
+
+        createModel: function (source) {
+          var vertices = [];
+          var normals = [];
+          var uvs = [];
+          var vertexData = [];
+          var normalData = [];
+          var uvData = [];
+          var hasUVs = true;
+          var lines = source.split(/\r?\n/);
+          for (var lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+            var line = lines[lineIndex].trim();
+            if (!line || line.charAt(0) === '#') {
+              continue;
+            }
+            var fields = line.split(/\s+/);
+            var values = fields.slice(1).map(Number);
+            if (fields[0] === 'v') {
+              vertices.push(values);
+            } else if (fields[0] === 'vn') {
+              normals.push(values);
+            } else if (fields[0] === 'vt') {
+              uvs.push(values);
+            } else if (fields[0] === 'f' && fields.length >= 4) {
+              var face = fields.slice(1).map(function (value) {
+                var indices = value.split('/');
+                var vertexIndex = Number(indices[0]);
+                return {
+                  vertex: vertexIndex < 0 ? vertices.length + vertexIndex : vertexIndex - 1,
+                  uv: indices[1] ? (Number(indices[1]) < 0
+                    ? uvs.length + Number(indices[1])
+                    : Number(indices[1]) - 1) : -1,
+                  normal: indices[2] ? (Number(indices[2]) < 0
+                    ? normals.length + Number(indices[2])
+                    : Number(indices[2]) - 1) : -1
+                };
+              });
+              for (var triangle = 1; triangle < face.length - 1; triangle++) {
+                var triangleVertices = [face[0], face[triangle], face[triangle + 1]];
+                for (var corner = 0; corner < 3; corner++) {
+                  var item = triangleVertices[corner];
+                  var point = vertices[item.vertex];
+                  vertexData.push(point[0], point[1], point[2]);
+                  if (item.normal >= 0 && normals[item.normal]) {
+                    var normal = normals[item.normal];
+                    normalData.push(normal[0], normal[1], normal[2]);
+                  } else {
+                    normalData.push(0, 0, 0);
+                  }
+                  if (item.uv >= 0 && uvs[item.uv]) {
+                    uvData.push(uvs[item.uv][0], uvs[item.uv][1]);
+                  } else {
+                    hasUVs = false;
+                    uvData.push(0, 0);
+                  }
+                }
+              }
+            }
+          }
+          if (!vertexData.length) {
+            throw new Error('Character model contains no face geometry: ' + this.data.src);
+          }
+
+          var positionAttribute = new THREE.Float32BufferAttribute(vertexData, 3);
+          var normalAttribute = new THREE.Float32BufferAttribute(normalData, 3);
+          var geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', positionAttribute);
+          geometry.setAttribute('normal', normalAttribute);
+          if (hasUVs) {
+            geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvData, 2));
+          }
+          geometry.computeBoundingBox();
+          var height = geometry.boundingBox.max.y - geometry.boundingBox.min.y;
+          var colors = [];
+          for (var vertex = 0; vertex < positionAttribute.count; vertex += 3) {
+            var centerY = (
+              positionAttribute.getY(vertex) +
+              positionAttribute.getY(vertex + 1) +
+              positionAttribute.getY(vertex + 2)
+            ) / 3;
+            var centerX = (
+              positionAttribute.getX(vertex) +
+              positionAttribute.getX(vertex + 1) +
+              positionAttribute.getX(vertex + 2)
+            ) / 3;
+            var centerZ = (
+              positionAttribute.getZ(vertex) +
+              positionAttribute.getZ(vertex + 1) +
+              positionAttribute.getZ(vertex + 2)
+            ) / 3;
+            var color;
+            if (this.data.palette === 'uncle') {
+              var faceWidth = height * 0.13;
+              var isFace = centerY > height * 0.82 &&
+                centerY < height * 0.94 &&
+                centerZ > 0.1 &&
+                Math.abs(centerX) < faceWidth;
+              var isBeard = centerY > height * 0.66 &&
+                centerY <= height * 0.83 &&
+                centerZ > 0.08 &&
+                Math.abs(centerX) < faceWidth * 1.4;
+              color = centerY > height * 0.94 ? '#bd7d2c' :
+                isFace ? '#bd896f' :
+                isBeard ? '#b9b9ad' : '#41484d';
+            } else if (this.data.palette === 'eo') {
+              var faceWidth = height * 0.12;
+              var isFace = centerY > height * 0.83 &&
+                centerY < height * 0.96 &&
+                centerZ > 0.13 &&
+                Math.abs(centerX) < faceWidth;
+              var isHair = centerY > height * 0.91 ||
+                (centerY > height * 0.68 && centerZ < -0.15);
+              var isGoldTrim = centerY > height * 0.52 &&
+                centerY < height * 0.64 &&
+                centerZ > 0.11 &&
+                Math.abs(centerX) < faceWidth * 1.4;
+              color = isFace ? '#e7b99e' :
+                isHair ? '#a7352d' :
+                isGoldTrim ? '#a9864d' : '#541523';
+            } else {
+              color = '#ffffff';
+            }
+            var faceColor = new THREE.Color(color);
+            for (var cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
+              colors.push(faceColor.r, faceColor.g, faceColor.b);
+            }
+          }
+          geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+          if (normalData.every(function (value) { return value === 0; })) {
+            geometry.computeVertexNormals();
+          }
+          var textureRoot = this.data.palette === 'uncle'
+            ? 'assets/uncle-narol-textured/'
+            : this.data.palette === 'haemanthus'
+              ? 'assets/haemanthus-textured/'
+              : 'assets/eo-textured/';
+          var textureLoader = new THREE.TextureLoader();
+          var diffuseMap = textureLoader.load(textureRoot + 'texture_diffuse.png');
+          diffuseMap.colorSpace = THREE.SRGBColorSpace;
+          var material = new THREE.MeshStandardMaterial({
+            map: hasUVs ? diffuseMap : null,
+            normalMap: hasUVs ? textureLoader.load(textureRoot + 'texture_normal.png') : null,
+            roughnessMap: hasUVs ? textureLoader.load(textureRoot + 'texture_roughness.png') : null,
+            metalnessMap: hasUVs ? textureLoader.load(textureRoot + 'texture_metallic.png') : null,
+            roughness: this.data.palette === 'haemanthus' ? 0.92 :
+              this.data.palette === 'eo' ? 0.9 : 0.84,
+            metalness: this.data.palette === 'haemanthus' ? 0 :
+              this.data.palette === 'eo' ? 0.05 : 0.1,
+            side: THREE.DoubleSide
+          });
+          return {geometry: geometry, material: material};
+        }
+      });
+
+      AFRAME.registerComponent('dialogue-trigger', {
+        schema: {
+          message: {type: 'string'},
+          speaker: {type: 'string', default: ''},
+          bubbleY: {type: 'number', default: 3.8},
+          bubbleZ: {type: 'number', default: 0.28},
+          dream: {type: 'boolean', default: false}
+        },
+
+        init: function () {
+          var scene = this.el.sceneEl;
+          var bubble = document.createElement('a-entity');
+          bubble.setAttribute('visible', false);
+          bubble.setAttribute('position', '0 ' + this.data.bubbleY + ' ' + this.data.bubbleZ);
+          bubble.setAttribute('rotation', '0 ' +
+            (-this.el.object3D.rotation.y * 180 / Math.PI) + ' 0');
+          bubble.setAttribute('scale', {
+            x: 0.85 / this.el.object3D.scale.x,
+            y: 0.85 / this.el.object3D.scale.y,
+            z: 0.85 / this.el.object3D.scale.z
+          });
+          var border = document.createElement('a-plane');
+          border.setAttribute('width', '4.62');
+          border.setAttribute('height', '2.82');
+          border.setAttribute('material',
+            'color: #c28454; metalness: 0.35; roughness: 0.48; side: double; depthWrite: false; depthTest: false');
+          bubble.appendChild(border);
+          var speakerName = document.createElement('a-text');
+          speakerName.setAttribute('material', 'depthTest: false');
+          speakerName.setAttribute('position', '0 1.08 0.03');
+          speakerName.setAttribute('align', 'center');
+          speakerName.setAttribute('anchor', 'center');
+          speakerName.setAttribute('baseline', 'center');
+          speakerName.setAttribute('width', '4.1');
+          speakerName.setAttribute('font', 'https://cdn.aframe.io/fonts/Exo2Bold.fnt');
+          speakerName.setAttribute('color', '#ffd28a');
+          speakerName.setAttribute('value', this.data.speaker);
+          bubble.appendChild(speakerName);
+          var panel = document.createElement('a-plane');
+          panel.setAttribute('material',
+            'color: #11131c; transparent: true; opacity: 0.96; side: double; depthWrite: false; depthTest: false');
+          panel.setAttribute('position', '0 0 0.012');
+          panel.setAttribute('width', '4.52');
+          panel.setAttribute('height', '2.72');
+          bubble.appendChild(panel);
+          var text = document.createElement('a-text');
+          text.setAttribute('class', 'dialogue-copy');
+          text.setAttribute('material', 'depthTest: false');
+          text.setAttribute('position', '0 0.02 0.03');
+          text.setAttribute('align', 'center');
+          text.setAttribute('anchor', 'center');
+          text.setAttribute('baseline', 'center');
+          text.setAttribute('width', '4.14');
+          text.setAttribute('wrap-count', '43');
+          text.setAttribute('font', 'https://cdn.aframe.io/fonts/Exo2Bold.fnt');
+          text.setAttribute('color', '#fff1dc');
+          text.setAttribute('value', this.data.message);
+          bubble.appendChild(text);
+
+          if (this.data.dream) {
+            var dreamButton = document.createElement('a-plane');
+            dreamButton.setAttribute('id', 'dream-button');
+            dreamButton.setAttribute('class', 'clickable');
+            dreamButton.setAttribute('dream-button', '');
+            dreamButton.setAttribute('position', '0 -1.03 0.035');
+            dreamButton.setAttribute('width', '2.9');
+            dreamButton.setAttribute('height', '0.62');
+            dreamButton.setAttribute('material',
+              'shader: flat; color: #e12b45; side: double; transparent: true; opacity: 1; depthTest: false; depthWrite: false');
+            var buttonLabel = document.createElement('a-text');
+            buttonLabel.setAttribute('position', '0 0 0.02');
+            buttonLabel.setAttribute('align', 'center');
+            buttonLabel.setAttribute('anchor', 'center');
+            buttonLabel.setAttribute('baseline', 'center');
+            buttonLabel.setAttribute('width', '2.65');
+            buttonLabel.setAttribute('font', 'https://cdn.aframe.io/fonts/Exo2Bold.fnt');
+            buttonLabel.setAttribute('color', '#fff0d2');
+            buttonLabel.setAttribute('value', 'ENTER THE DREAM');
+            dreamButton.appendChild(buttonLabel);
+            bubble.appendChild(dreamButton);
+            this.dreamButton = dreamButton;
+          }
+          this.bubble = bubble;
+          this.el.appendChild(bubble);
+          this.bubble.setAttribute('visible', false);
+          this.bubble.object3D.visible = false;
+          this.overlayElements = [border, speakerName, panel, text];
+          this.applyDialogueOverlay = function (element) {
+            var dialogueVisible = this.dialogueVisible;
+            var dreamButtonElement = this.dreamButton;
+            var renderOrder = element === border ? 20 :
+              element === panel ? 21 :
+              element === dreamButtonElement ? 23 :
+              element === buttonLabel ? 24 : 22;
+            element.object3D.traverse(function (object) {
+              object.visible = dialogueVisible;
+              if (!object.isMesh) {
+                return;
+              }
+              object.renderOrder = renderOrder;
+              if (element !== dreamButtonElement && element !== buttonLabel) {
+                object.raycast = function () {};
+              }
+              var materials = Array.isArray(object.material)
+                ? object.material : [object.material];
+              materials.forEach(function (material) {
+                material.depthTest = false;
+                material.needsUpdate = true;
+              });
+            });
+          };
+          this.onOverlayObject3DSet = function (event) {
+            this.applyDialogueOverlay(event.target);
+          }.bind(this);
+          if (this.dreamButton) {
+            this.overlayElements.push(this.dreamButton, buttonLabel);
+          }
+          this.overlayElements.forEach(function (element) {
+            element.addEventListener('object3dset', this.onOverlayObject3DSet);
+            this.applyDialogueOverlay(element);
+          }.bind(this));
+          this.clickTarget = this.el.classList.contains('dialogue-hitbox')
+            ? this.el : this.el.querySelector('.dialogue-hitbox');
+          if (!this.clickTarget) {
+            throw new Error('Dialogue trigger requires a .dialogue-hitbox character body.');
+          }
+          this.onClick = function (event) {
+            if (this.suspended || event.target !== this.clickTarget ||
+                (!event.isTrusted && !(event.detail && event.detail.cursorEl))) {
+              return;
+            }
+            event.stopPropagation();
+            this.show();
+          }.bind(this);
+          this.clickTarget.addEventListener('click', this.onClick);
+          this.hide();
+        },
+
+        hide: function () {
+          this.dialogueVisible = false;
+          this.bubble.setAttribute('visible', false);
+          this.bubble.object3D.traverse(function (object) {
+            object.visible = false;
+          });
+        },
+
+        show: function () {
+          this.dialogueVisible = true;
+          this.bubble.setAttribute('visible', true);
+          this.bubble.object3D.traverse(function (object) {
+            object.visible = true;
+          });
+        },
+
+        tick: function () {
+          if (this.dialogueVisible) {
+            return;
+          }
+          this.bubble.object3D.traverse(function (object) {
+            object.visible = false;
+          });
+        },
+
+        remove: function () {
+          this.clickTarget.removeEventListener('click', this.onClick);
+          this.overlayElements.forEach(function (element) {
+            element.removeEventListener('object3dset', this.onOverlayObject3DSet);
+          }.bind(this));
+          if (this.bubble && this.bubble.parentNode) {
+            this.bubble.parentNode.removeChild(this.bubble);
+          }
+        }
+      });
+
+      AFRAME.registerComponent('haemanthus-hover', {
+        schema: {
+          title: {type: 'string', default: 'haemanthus blossom'},
+          bubbleY: {type: 'number', default: 3.8},
+          bubbleZ: {type: 'number', default: 1.2},
+          message: {
+            type: 'string',
+            default: "Ah, the Haemanthus. Isn't it beautiful? They say flowers like these are a gift from the surface. Imagine a world where things like this grow freely, where beauty isn't something we have to dream about. I wish I could see a whole field of them someday."
+          }
+        },
+
+        init: function () {
+          this.hovered = false;
+          this.baseScale = this.el.object3D.scale.clone();
+          this.baseY = this.el.object3D.position.y;
+          this.el.setAttribute('dialogue-trigger', {
+            speaker: this.data.title,
+            bubbleY: this.data.bubbleY,
+            bubbleZ: this.data.bubbleZ,
+            message: this.data.message
+          });
+          this.onMouseEnter = function () {
+            this.hovered = true;
+          }.bind(this);
+          this.onMouseLeave = function () {
+            this.hovered = false;
+          }.bind(this);
+          this.el.addEventListener('mouseenter', this.onMouseEnter);
+          this.el.addEventListener('mouseleave', this.onMouseLeave);
+        },
+
+        tick: function (time, delta) {
+          var target = this.hovered ? 1.12 : 1;
+          var amount = 1 - Math.exp(-delta / 120);
+          this.el.object3D.scale.lerp(
+            this.baseScale.clone().multiplyScalar(target),
+            amount
+          );
+          var targetY = this.baseY + (this.hovered ? 0.14 : 0);
+          this.el.object3D.position.y += (targetY - this.el.object3D.position.y) * amount;
+        },
+
+        remove: function () {
+          this.el.removeEventListener('mouseenter', this.onMouseEnter);
+          this.el.removeEventListener('mouseleave', this.onMouseLeave);
+        }
+      });
+
+      AFRAME.registerComponent('dream-button', {
+        init: function () {
+          this.onClick = function () {
+            var transition = this.el.sceneEl.querySelector('#world').components['dream-transition'];
+            transition.begin();
+          }.bind(this);
+          this.el.addEventListener('click', this.onClick);
+        },
+
+        remove: function () {
+          this.el.removeEventListener('click', this.onClick);
+        }
+      });
+
+      AFRAME.registerComponent('surface-man', {
+        init: function () {
+          var group = new THREE.Group();
+          var skin = new THREE.MeshStandardMaterial({color: '#b67a5e', roughness: 0.88});
+          var beard = new THREE.MeshStandardMaterial({color: '#c4c6bc', roughness: 0.94});
+          var beardShadow = new THREE.MeshStandardMaterial({color: '#737a78', roughness: 0.9});
+          var suit = new THREE.MeshStandardMaterial({color: '#333a40', metalness: 0.42, roughness: 0.63});
+          var suitTrim = new THREE.MeshStandardMaterial({color: '#b87931', metalness: 0.58, roughness: 0.4});
+          var helmet = new THREE.MeshStandardMaterial({color: '#bd7c24', metalness: 0.48, roughness: 0.45});
+          var lamp = new THREE.MeshBasicMaterial({color: '#dff7ff'});
+          var glass = new THREE.MeshPhysicalMaterial({
+            color: '#b8eeff',
+            emissive: '#4ab3d2',
+            transparent: true,
+            opacity: 0.7,
+            roughness: 0.12
+          });
+          var addMesh = function (geometry, material, position, scale) {
+            var mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(position[0], position[1], position[2]);
+            mesh.scale.set(scale[0], scale[1], scale[2]);
+            group.add(mesh);
+            return mesh;
+          };
+
+          addMesh(new THREE.CylinderGeometry(0.23, 0.3, 0.9, 12), suit, [0, 0.78, 0], [1, 1, 1]);
+          addMesh(new THREE.BoxGeometry(0.62, 0.5, 0.34), suit, [0, 0.91, 0.02], [1, 1, 1]);
+          addMesh(new THREE.BoxGeometry(0.44, 0.08, 0.06), suitTrim, [0, 1.12, 0.205], [1, 1, 1]);
+          addMesh(new THREE.CylinderGeometry(0.105, 0.1, 0.66, 10), suit, [-0.16, 0.2, 0], [1, 1, 1]);
+          addMesh(new THREE.CylinderGeometry(0.105, 0.1, 0.66, 10), suit, [0.16, 0.2, 0], [1, 1, 1]);
+          addMesh(new THREE.SphereGeometry(0.34, 16, 12), skin, [0, 1.65, 0.035], [0.9, 1.05, 0.8]);
+          addMesh(new THREE.SphereGeometry(0.27, 16, 12), beardShadow, [0, 1.43, 0.12], [0.86, 0.82, 0.75]);
+          addMesh(new THREE.SphereGeometry(0.22, 16, 12), beard, [0, 1.35, 0.16], [0.88, 0.94, 0.7]);
+          addMesh(new THREE.ConeGeometry(0.15, 0.62, 10), beard, [0, 1.12, 0.13], [1, 1, 0.8]);
+          addMesh(new THREE.SphereGeometry(0.25, 16, 10), helmet, [0, 2.03, -0.02], [1.32, 0.48, 1.12]);
+          addMesh(new THREE.CylinderGeometry(0.29, 0.29, 0.065, 20), helmet, [0, 1.91, 0.015], [1.25, 1, 1]);
+          addMesh(new THREE.TorusGeometry(0.12, 0.026, 8, 24), suitTrim, [0, 2.04, 0.255], [1.1, 1, 0.55]);
+          addMesh(new THREE.SphereGeometry(0.095, 12, 8), lamp, [0, 2.04, 0.28], [0.85, 0.85, 0.4]);
+          addMesh(new THREE.SphereGeometry(0.062, 10, 7), glass, [-0.1, 1.69, 0.305], [1, 1, 0.35]);
+          addMesh(new THREE.SphereGeometry(0.062, 10, 7), glass, [0.1, 1.69, 0.305], [1, 1, 0.35]);
+          addMesh(new THREE.BoxGeometry(0.1, 0.28, 0.08), suitTrim, [-0.21, 0.85, 0.235], [1, 1, 1]);
+          addMesh(new THREE.CylinderGeometry(0.038, 0.038, 0.52, 8), suitTrim, [0, 0.86, -0.19], [1, 1, 1]).rotation.z = 0.26;
+
+          for (var strand = 0; strand < 34; strand++) {
+            var angle = strand * 2.399963229728653;
+            var radius = 0.06 + (strand % 5) * 0.035;
+            var points = [
+              new THREE.Vector3(Math.cos(angle) * radius, 1.55, 0.19 + Math.sin(angle) * 0.08),
+              new THREE.Vector3(Math.cos(angle) * 0.16, 1.39 - (strand % 4) * 0.035, 0.22 + Math.sin(angle) * 0.07),
+              new THREE.Vector3(Math.cos(angle) * 0.11, 1.18 - (strand % 6) * 0.025, 0.2)
+            ];
+            group.add(new THREE.Mesh(
+              new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 9, 0.012, 4, false),
+              strand % 3 === 0 ? beard : beardShadow
+            ));
+          }
+          this.el.setObject3D('mesh', group);
+        }
+      });
+
+      AFRAME.registerComponent('mars-sky', {
+        init: function () {
+          var canvas = document.createElement('canvas');
+          canvas.width = 2048;
+          canvas.height = 1024;
+          var context = canvas.getContext('2d');
+          var background = context.createLinearGradient(0, 0, 0, canvas.height);
+          background.addColorStop(0, '#030611');
+          background.addColorStop(0.52, '#11152c');
+          background.addColorStop(0.78, '#302339');
+          background.addColorStop(0.93, '#773b3c');
+          background.addColorStop(1, '#d36b48');
+          context.fillStyle = background;
+          context.fillRect(0, 0, canvas.width, canvas.height);
+
+          var seed = 937;
+          var random = function () {
+            seed = (seed * 16807) % 2147483647;
+            return (seed - 1) / 2147483646;
+          };
+          for (var cloud = 0; cloud < 28; cloud++) {
+            var centerX = random() * canvas.width;
+            var centerY = 200 + random() * 520;
+            var radius = 90 + random() * 290;
+            var nebula = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+            var tint = cloud % 3 === 0 ? '106, 76, 158' :
+              cloud % 3 === 1 ? '61, 110, 150' : '142, 62, 100';
+            nebula.addColorStop(0, 'rgba(' + tint + ',0.17)');
+            nebula.addColorStop(1, 'rgba(' + tint + ',0)');
+            context.fillStyle = nebula;
+            context.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
+          }
+
+          for (var star = 0; star < 1750; star++) {
+            var sx = random() * canvas.width;
+            var sy = random() * canvas.height * 0.84;
+            var size = random() < 0.07 ? 1.8 + random() * 1.8 : 0.45 + random() * 0.85;
+            var alpha = 0.3 + random() * 0.7;
+            context.fillStyle = 'rgba(225,234,255,' + alpha + ')';
+            context.beginPath();
+            context.arc(sx, sy, size, 0, Math.PI * 2);
+            context.fill();
+            if (size > 2.6) {
+              context.fillRect(sx - 0.4, sy - size * 2, 0.8, size * 4);
+              context.fillRect(sx - size * 2, sy - 0.4, size * 4, 0.8);
+            }
+          }
+          var texture = new THREE.CanvasTexture(canvas);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          var sky = new THREE.Mesh(
+            new THREE.SphereGeometry(480, 64, 32),
+            new THREE.MeshBasicMaterial({
+              map: texture,
+              side: THREE.BackSide,
+              depthWrite: false
+            })
+          );
+          sky.frustumCulled = false;
+          this.el.setObject3D('mesh', sky);
+        }
+      });
+
+      AFRAME.registerComponent('dream-transition', {
+        init: function () {
+          this.running = false;
+          this.phase = '';
+          this.elapsed = 0;
+          this.duration = 900;
+          this.curtain = this.el.sceneEl.querySelector('#transition-curtain');
+          this.curtainMaterial = null;
+        },
+
+        begin: function () {
+          if (this.running) {
+            return;
+          }
+          var curtainMesh = this.curtain.getObject3D('mesh');
+          if (!curtainMesh) {
+            throw new Error('Dream transition curtain is not ready.');
+          }
+          this.curtainMaterial = curtainMesh.material;
+          this.running = true;
+          this.phase = 'in';
+          this.elapsed = 0;
+          this.curtain.setAttribute('visible', true);
+          this.curtainMaterial.opacity = 0;
+        },
+
+        changeWorld: function () {
+          var scene = this.el.sceneEl;
+          scene.querySelector('#cave-set').setAttribute('visible', false);
+          scene.querySelector('#garden-set').setAttribute('visible', false);
+          scene.querySelector('#cave-lighting').setAttribute('visible', false);
+          scene.querySelector('[stl-ring]').setAttribute('visible', false);
+          scene.querySelector('#ring-label').setAttribute('visible', false);
+          scene.querySelector('#space-sky').setAttribute('visible', false);
+          scene.querySelector('#mars-set').setAttribute('visible', true);
+          scene.querySelector('#mars-sky').setAttribute('visible', true);
+          var viewer = scene.querySelector('#viewer');
+          var camera = viewer.querySelector('[camera]');
+          var controls = camera.components['look-controls'];
+          if (controls) {
+            controls.yawObject.rotation.y = 0;
+            controls.pitchObject.rotation.x = 0;
+          }
+          camera.object3D.rotation.set(0, 0, 0);
+          viewer.object3D.position.set(0, 0, 0);
+          viewer.object3D.rotation.set(0, 0, 0);
+        },
+
+        tick: function (time, delta) {
+          if (!this.running) {
+            return;
+          }
+          this.elapsed += delta;
+          if (this.phase === 'in') {
+            this.curtainMaterial.opacity = Math.min(this.elapsed / this.duration, 1);
+            if (this.elapsed >= this.duration) {
+              this.changeWorld();
+              this.phase = 'hold';
+              this.elapsed = 0;
+            }
+          } else if (this.phase === 'hold') {
+            if (this.elapsed >= 350) {
+              this.phase = 'out';
+              this.elapsed = 0;
+            }
+          } else {
+            this.curtainMaterial.opacity = 1 - Math.min(this.elapsed / this.duration, 1);
+            if (this.elapsed >= this.duration) {
+              this.curtainMaterial.opacity = 0;
+              this.curtain.setAttribute('visible', false);
+              this.running = false;
+              this.phase = '';
+            }
+          }
+        }
+      });
+
+      var cityBuildingModels = {};
+      AFRAME.registerComponent('mars-buildings', {
+        init: function () {
+          var specifications = [
+            {src: 'assets/cyberpunk-building.obj', upAxis: 'y'},
+            {src: 'assets/modern-glass-building.obj', upAxis: 'y'},
+            {src: 'assets/building-79.obj', upAxis: 'z'}
+          ];
+          var rng = 43;
+          var random = function () {
+            rng = (rng * 16807) % 2147483647;
+            return (rng - 1) / 2147483646;
+          };
+          for (var row = 0; row < 35; row++) {
+            for (var sideIndex = 0; sideIndex < 2; sideIndex++) {
+              var side = sideIndex === 0 ? -1 : 1;
+              var modelIndex = (row + sideIndex) % specifications.length;
+              var specification = specifications[modelIndex];
+              var height = 25 + random() * 14;
+              var building = new THREE.Group();
+              var depth = row < 21
+                ? -12 - row * 20
+                : 28 + (row - 21) * 20;
+              building.position.set(
+                side * (17 + (row % 3) * 6 + random() * 2),
+                0,
+                depth - random() * 5
+              );
+              building.scale.setScalar(height);
+              building.userData.modelIndex = modelIndex;
+              this.el.object3D.add(building);
+
+              var cacheKey = specification.src;
+              if (!cityBuildingModels[cacheKey]) {
+                cityBuildingModels[cacheKey] = this.loadBuilding(specification);
+              }
+              (function (target, modelPromise) {
+                modelPromise
+                  .then(function (buildingGroup) {
+                    target.add(buildingGroup.clone(true));
+                  })
+                  .catch(function (error) {
+                    console.error(error);
+                  });
+              })(building, cityBuildingModels[cacheKey]);
+            }
+          }
+        },
+
+        loadBuilding: function (specification) {
+          var upAxis = specification.upAxis;
+          return fetch(specification.src)
+            .then(function (response) {
+              if (!response.ok) {
+                throw new Error('Unable to load city building model: ' + response.status);
+              }
+              return response.text();
+            })
+            .then(function (source) {
+              return this.parseBuilding(source, upAxis);
+            }.bind(this));
+        },
+
+        parseBuilding: function (source, upAxis) {
+          var vertices = [];
+          var materials = Object.create(null);
+          var materialName = 'default';
+          var lines = source.split(/\r?\n/);
+          for (var lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+            var line = lines[lineIndex].trim();
+            if (!line || line.charAt(0) === '#') {
+              continue;
+            }
+            var fields = line.split(/\s+/);
+            if (fields[0] === 'v') {
+              vertices.push([Number(fields[1]), Number(fields[2]), Number(fields[3])]);
+            } else if (fields[0] === 'usemtl') {
+              materialName = fields.slice(1).join(' ') || 'default';
+            } else if (fields[0] === 'f' && fields.length >= 4) {
+              if (!materials[materialName]) {
+                materials[materialName] = [];
+              }
+              var face = fields.slice(1).map(function (value) {
+                var vertexIndex = Number(value.split('/')[0]);
+                return vertexIndex < 0 ? vertices.length + vertexIndex : vertexIndex - 1;
+              });
+              for (var triangle = 1; triangle < face.length - 1; triangle++) {
+                materials[materialName].push(face[0], face[triangle], face[triangle + 1]);
+              }
+            }
+          }
+          if (!vertices.length) {
+            throw new Error('City building OBJ contains no vertices.');
+          }
+
+          var axis = upAxis === 'z' ? 2 : 1;
+          var min = [Infinity, Infinity, Infinity];
+          var max = [-Infinity, -Infinity, -Infinity];
+          for (var vertex = 0; vertex < vertices.length; vertex++) {
+            for (var coordinate = 0; coordinate < 3; coordinate++) {
+              min[coordinate] = Math.min(min[coordinate], vertices[vertex][coordinate]);
+              max[coordinate] = Math.max(max[coordinate], vertices[vertex][coordinate]);
+            }
+          }
+          var height = max[axis] - min[axis];
+          var centerX = (min[axis === 0 ? 1 : 0] + max[axis === 0 ? 1 : 0]) / 2;
+          var centerZ = (min[axis === 2 ? 1 : 2] + max[axis === 2 ? 1 : 2]) / 2;
+          var model = new THREE.Group();
+          var names = Object.keys(materials);
+          for (var materialIndex = 0; materialIndex < names.length; materialIndex++) {
+            var name = names[materialIndex];
+            var indices = materials[name];
+            var positions = [];
+            var colors = [];
+            var nameLower = name.toLowerCase();
+            var isWindow = /glass|window|frost|mirror/.test(nameLower);
+            var isSign = /light|emiss|neon|sign|night_scene|restaurant|robottechnology|panopticon/.test(nameLower);
+            var signColors = ['#32d9ff', '#ff4fa3', '#ffb34e', '#79f2d0'];
+            var baseColor = isSign
+              ? signColors[materialIndex % signColors.length]
+              : isWindow ? '#263c50'
+              : ['#272c3b', '#37313e', '#4b3538', '#293641', '#44363c'][
+                (materialIndex + name.length) % 5
+              ];
+            var faceColor = new THREE.Color(baseColor);
+            for (var index = 0; index < indices.length; index++) {
+              var point = vertices[indices[index]];
+              var x;
+              var y;
+              var z;
+              if (axis === 2) {
+                x = point[0] - centerX;
+                y = point[2] - min[2];
+                z = point[1] - centerZ;
+              } else {
+                x = point[0] - centerX;
+                y = point[1] - min[1];
+                z = point[2] - centerZ;
+              }
+              positions.push(x / height, y / height, z / height);
+              colors.push(faceColor.r, faceColor.g, faceColor.b);
+            }
+            var geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geometry.computeVertexNormals();
+            var facade = isSign
+              ? new THREE.MeshBasicMaterial({
+                vertexColors: true,
+                side: THREE.DoubleSide
+              })
+              : new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                roughness: isWindow ? 0.3 : 0.84,
+                metalness: isWindow ? 0.3 : 0.34,
+                emissive: isWindow ? '#102235' : '#000000',
+                emissiveIntensity: isWindow ? 0.45 : 0,
+                transparent: isWindow && !/mirror/.test(nameLower),
+                opacity: isWindow && !/mirror/.test(nameLower) ? 0.86 : 1,
+                depthWrite: !isWindow || /mirror/.test(nameLower),
+                side: THREE.DoubleSide
+              });
+            var mesh = new THREE.Mesh(geometry, facade);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            model.add(mesh);
+          }
+          return model;
+        }
+      });
+
+      AFRAME.registerComponent('mars-world', {
+        init: function () {
+          var group = new THREE.Group();
+          var terrainGeometry = new THREE.BufferGeometry();
+          var terrainPositions = [];
+          var terrainColors = [];
+          var terrainIndices = [];
+          var segments = 144;
+          var terrainSize = 320;
+          var grassBase = new THREE.Color('#8bae5d');
+          var grassShade = new THREE.Color('#5e7944');
+          for (var zIndex = 0; zIndex <= segments; zIndex++) {
+            var z = 35 - zIndex * (terrainSize / segments);
+            for (var xIndex = 0; xIndex <= segments; xIndex++) {
+              var x = -terrainSize / 2 + xIndex * (terrainSize / segments);
+              var distance = Math.sqrt(x * x + (z + 32) * (z + 32));
+              var height = -0.18 +
+                0.12 * Math.sin(x * 0.16 + z * 0.09) +
+                0.09 * Math.cos(z * 0.13 - x * 0.07) +
+                Math.max(0, Math.sin(distance * 0.22) * 0.16);
+              var streetCut = Math.max(0, Math.min(1, (11 - Math.abs(x)) / 1.5));
+              streetCut = streetCut * streetCut * (3 - 2 * streetCut);
+              height -= streetCut * Math.max(0, height + 0.18);
+              var grassVariation = 0.5 + 0.5 *
+                Math.sin(x * 0.14 + z * 0.08) * Math.cos(z * 0.11 - x * 0.04);
+              var grassRed = THREE.MathUtils.lerp(grassBase.r, grassShade.r, grassVariation);
+              var grassGreen = THREE.MathUtils.lerp(grassBase.g, grassShade.g, grassVariation);
+              var grassBlue = THREE.MathUtils.lerp(grassBase.b, grassShade.b, grassVariation);
+              terrainPositions.push(x, height, z);
+              terrainColors.push(grassRed, grassGreen, grassBlue);
+              if (xIndex < segments && zIndex < segments) {
+                var vertex = zIndex * (segments + 1) + xIndex;
+                terrainIndices.push(
+                  vertex, vertex + 1, vertex + segments + 1,
+                  vertex + 1, vertex + segments + 2, vertex + segments + 1
+                );
+              }
+            }
+          }
+          terrainGeometry.setAttribute('position', new THREE.Float32BufferAttribute(terrainPositions, 3));
+          terrainGeometry.setAttribute('color', new THREE.Float32BufferAttribute(terrainColors, 3));
+          terrainGeometry.setIndex(terrainIndices);
+          terrainGeometry.computeVertexNormals();
+          var terrain = new THREE.Mesh(
+            terrainGeometry,
+            new THREE.MeshStandardMaterial({vertexColors: true, roughness: 1})
+          );
+          terrain.receiveShadow = true;
+          group.add(terrain);
+
+          var road = new THREE.Mesh(
+            new THREE.PlaneGeometry(12, 340),
+            new THREE.MeshStandardMaterial({color: '#292b34', roughness: 0.82, metalness: 0.18})
+          );
+          road.rotation.x = -Math.PI / 2;
+          road.position.set(0, 0.055, -132);
+          group.add(road);
+          var curbMaterial = new THREE.MeshStandardMaterial({color: '#77716b', roughness: 0.84});
+          var walkwayMaterial = new THREE.MeshStandardMaterial({color: '#655148', roughness: 0.9});
+          var seamMaterial = new THREE.MeshStandardMaterial({color: '#3c3534', roughness: 0.84});
+          var laneMaterial = new THREE.MeshBasicMaterial({color: '#e5c595'});
+          for (var edge = -1; edge <= 1; edge += 2) {
+            var curb = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.18, 340), curbMaterial);
+            curb.position.set(edge * 6.18, 0.11, -132);
+            group.add(curb);
+            var sidewalk = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 340), walkwayMaterial);
+            sidewalk.rotation.x = -Math.PI / 2;
+            sidewalk.position.set(edge * 7.9, 0.085, -132);
+            group.add(sidewalk);
+            for (var slab = 0; slab < 32; slab++) {
+              var seam = new THREE.Mesh(
+                new THREE.BoxGeometry(3.2, 0.012, 0.055),
+                seamMaterial
+              );
+              seam.position.set(edge * 7.9, 0.096, 28 - slab * 10);
+              group.add(seam);
+            }
+          }
+          for (var dash = 0; dash < 38; dash++) {
+            var marking = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.025, 2.8), laneMaterial);
+            marking.position.set(0, 0.075, 24 - dash * 8);
+            group.add(marking);
+          }
+
+          var lampPostMaterial = new THREE.MeshStandardMaterial({
+            color: '#59616a',
+            metalness: 0.74,
+            roughness: 0.34
+          });
+          var lampGlow = new THREE.MeshBasicMaterial({color: '#ffe1a0'});
+          for (var postIndex = 0; postIndex < 12; postIndex++) {
+            var postSide = postIndex % 2 === 0 ? -1 : 1;
+            var postZ = 15 - Math.floor(postIndex / 2) * 25;
+            var pole = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.07, 0.11, 6.2, 8),
+              lampPostMaterial
+            );
+            pole.position.set(postSide * 5.2, 3.1, postZ);
+            group.add(pole);
+            var arm = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.055, 0.07, 1.9, 7),
+              lampPostMaterial
+            );
+            arm.rotation.z = Math.PI / 2;
+            arm.position.set(postSide * 4.55, 6.05, postZ);
+            group.add(arm);
+            var lamp = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.16, 0.34), lampGlow);
+            lamp.position.set(postSide * 3.85, 5.98, postZ);
+            group.add(lamp);
+          }
+
+          var darkMaterial = new THREE.MeshStandardMaterial({
+            color: '#41434a',
+            roughness: 0.5,
+            metalness: 0.64
+          });
+
+          var conduitMaterial = new THREE.MeshStandardMaterial({
+            color: '#78828a',
+            metalness: 0.72,
+            roughness: 0.32
+          });
+          for (var conduit = -1; conduit <= 1; conduit += 2) {
+            var pipe = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.28, 0.28, 180, 12),
+              conduitMaterial
+            );
+            pipe.rotation.x = Math.PI / 2;
+            pipe.position.set(conduit * 6.8, 0.68, -75);
+            group.add(pipe);
+            for (var support = 0; support < 13; support++) {
+              var brace = new THREE.Mesh(
+                new THREE.BoxGeometry(0.12, 0.72, 0.12),
+                darkMaterial
+              );
+              brace.position.set(conduit * 6.8, 0.36, 12 - support * 14);
+              group.add(brace);
+            }
+          }
+
+          var habitatMaterial = new THREE.MeshPhysicalMaterial({
+            color: '#b5c9d2',
+            transparent: true,
+            opacity: 0.34,
+            roughness: 0.18,
+            metalness: 0.12,
+            side: THREE.DoubleSide
+          });
+          for (var habitat = 0; habitat < 4; habitat++) {
+            var hx = (habitat - 1.5) * 20;
+            var hz = -115 - (habitat % 2) * 19;
+            var base = new THREE.Mesh(
+              new THREE.CylinderGeometry(3.1, 3.6, 1.8, 12),
+              darkMaterial
+            );
+            base.position.set(hx, 0.9, hz);
+            group.add(base);
+            var dome = new THREE.Mesh(
+              new THREE.SphereGeometry(3.2, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+              habitatMaterial
+            );
+            dome.position.set(hx, 1.8, hz);
+            group.add(dome);
+          }
+
+          var shipBody = new THREE.MeshStandardMaterial({
+            color: '#c4cbd0',
+            metalness: 0.68,
+            roughness: 0.3
+          });
+          var shipWingMaterial = new THREE.MeshStandardMaterial({
+            color: '#6e7881',
+            metalness: 0.62,
+            roughness: 0.38
+          });
+          var engineMaterial = new THREE.MeshBasicMaterial({color: '#ff9a52'});
+          var ships = [
+            {x: -11, y: 10, z: -12, scale: 1.15, drift: 12},
+            {x: 10, y: 14, z: -22, scale: 0.9, drift: -15},
+            {x: -3, y: 18, z: -39, scale: 1.35, drift: 18},
+            {x: 18, y: 12, z: -57, scale: 0.82, drift: -20},
+            {x: -18, y: 23, z: -75, scale: 1.55, drift: 22}
+          ];
+          for (var shipIndex = 0; shipIndex < ships.length; shipIndex++) {
+            var spec = ships[shipIndex];
+            var ship = new THREE.Group();
+            var fuselage = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 3.1, 4, 8), shipBody);
+            fuselage.rotation.x = Math.PI / 2;
+            ship.add(fuselage);
+            var nose = new THREE.Mesh(new THREE.ConeGeometry(0.55, 1.7, 10), shipBody);
+            nose.rotation.x = -Math.PI / 2;
+            nose.position.z = -2.35;
+            ship.add(nose);
+            var wing = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.12, 1.5), shipWingMaterial);
+            wing.position.z = 0.2;
+            ship.add(wing);
+            for (var engine = -1; engine <= 1; engine++) {
+              var thruster = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), engineMaterial);
+              thruster.position.set(engine * 0.82, -0.08, 1.78);
+              ship.add(thruster);
+            }
+            ship.position.set(spec.x, spec.y, spec.z);
+            ship.scale.setScalar(spec.scale);
+            ship.userData.drift = spec.drift;
+            ship.userData.startX = spec.x;
+            ship.userData.startZ = spec.z;
+            ship.userData.lane = shipIndex;
+            group.add(ship);
+          }
+
+          var streetlightColors = [0x43cfff, 0xff4c9a, 0xffb55e, 0x43cfff];
+          for (var streetlight = 0; streetlight < 12; streetlight++) {
+            var light = new THREE.PointLight(
+              streetlightColors[streetlight % streetlightColors.length],
+              2.6,
+              26,
+              2
+            );
+            var lightSide = streetlight % 2 === 0 ? -1 : 1;
+            light.position.set(lightSide * 7.6, 5.2, -18 - Math.floor(streetlight / 2) * 23);
+            group.add(light);
+          }
+
+          var signMaterials = [
+            new THREE.MeshBasicMaterial({color: '#34dfff', side: THREE.DoubleSide}),
+            new THREE.MeshBasicMaterial({color: '#ff4f9d', side: THREE.DoubleSide}),
+            new THREE.MeshBasicMaterial({color: '#ffb351', side: THREE.DoubleSide})
+          ];
+          for (var signIndex = 0; signIndex < 20; signIndex++) {
+            var signSide = signIndex % 2 === 0 ? -1 : 1;
+            var sign = new THREE.Mesh(
+              new THREE.BoxGeometry(0.06, 3.2 + (signIndex % 3) * 0.8, 1.1 + (signIndex % 4) * 0.18),
+              signMaterials[signIndex % signMaterials.length]
+            );
+            sign.position.set(
+              signSide * (18 + (signIndex % 3) * 4),
+              7.5 + (signIndex % 4) * 2.2,
+              -13 - signIndex * 12
+            );
+            group.add(sign);
+          }
+          var beaconMaterial = new THREE.MeshBasicMaterial({color: '#ff7457'});
+          for (var beacon = 0; beacon < 7; beacon++) {
+            var light = new THREE.Mesh(new THREE.SphereGeometry(0.16, 7, 5), beaconMaterial);
+            light.position.set(-28 + beacon * 9, 4 + (beacon % 3) * 2, -57 - (beacon % 2) * 12);
+            group.add(light);
+          }
+          this.ships = [];
+          group.traverse(function (object) {
+            if (object.isGroup && object.userData.drift) {
+              this.ships.push(object);
+            }
+          }.bind(this));
+          this.el.setObject3D('mesh', group);
+        },
+
+        tick: function (time) {
+          for (var ship = 0; ship < this.ships.length; ship++) {
+            var vessel = this.ships[ship];
+            vessel.position.x = vessel.userData.startX +
+              Math.sin(time * 0.00013 + ship * 2.1) * vessel.userData.drift;
+            vessel.position.z = vessel.userData.startZ +
+              Math.cos(time * 0.0001 + ship * 1.7) * 3.5;
+            vessel.rotation.y = Math.sin(time * 0.00013 + ship * 2.1) * 0.32;
+          }
+        }
+      });
+
+      AFRAME.registerComponent('glass-dome', {
+        init: function () {
+          this.el.setAttribute('visible', false);
+          var radius = 20;
+          var group = new THREE.Group();
+          var glassMaterial = new THREE.MeshPhysicalMaterial({
+            color: '#b8c2b9',
+            transparent: true,
+            opacity: 0.045,
+            roughness: 0.2,
+            metalness: 0,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          });
+          var frameMaterial = new THREE.MeshStandardMaterial({
+            color: '#788078',
+            metalness: 0.12,
+            roughness: 0.78
+          });
+          var sphere = new THREE.SphereGeometry(radius, 96, 48, 0, Math.PI * 2, 0, Math.PI / 2)
+            .toNonIndexed();
+          var sourcePositions = sphere.attributes.position;
+          var shellPositions = [];
+          for (var triangle = 0; triangle < sourcePositions.count; triangle += 3) {
+            var x = (sourcePositions.getX(triangle) +
+              sourcePositions.getX(triangle + 1) +
+              sourcePositions.getX(triangle + 2)) / 3 / radius;
+            var y = (sourcePositions.getY(triangle) +
+              sourcePositions.getY(triangle + 1) +
+              sourcePositions.getY(triangle + 2)) / 3 / radius;
+            var z = (sourcePositions.getZ(triangle) +
+              sourcePositions.getZ(triangle + 1) +
+              sourcePositions.getZ(triangle + 2)) / 3 / radius;
+            if (z > 0.88 && Math.abs(x) < 0.12 && Math.abs(y - 0.085) < 0.12) {
+              continue;
+            }
+            for (var vertex = 0; vertex < 3; vertex++) {
+              var index = triangle + vertex;
+              shellPositions.push(
+                sourcePositions.getX(index),
+                sourcePositions.getY(index),
+                sourcePositions.getZ(index)
+              );
+            }
+          }
+          sphere = new THREE.BufferGeometry();
+          sphere.setAttribute('position', new THREE.Float32BufferAttribute(shellPositions, 3));
+          sphere.computeVertexNormals();
+          var shell = new THREE.Mesh(sphere, glassMaterial);
+          group.add(shell);
+
+          for (var rib = 0; rib < 12; rib++) {
+            var angle = rib * Math.PI / 6;
+            if (Math.sin(angle) > 0.98 && Math.abs(Math.cos(angle)) < 0.08) {
+              continue;
+            }
+            var points = [];
+            for (var step = 0; step <= 24; step++) {
+              var theta = (step / 24) * Math.PI / 2;
+              points.push(new THREE.Vector3(
+                Math.sin(theta) * radius * Math.cos(angle),
+                Math.cos(theta) * radius,
+                Math.sin(theta) * radius * Math.sin(angle)
+              ));
+            }
+            var ribMesh = new THREE.Mesh(
+              new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 32, 0.035, 5, false),
+              frameMaterial
+            );
+            group.add(ribMesh);
+          }
+
+          var levels = [4, 9, 14, 18];
+          for (var level = 0; level < levels.length; level++) {
+            var y = levels[level];
+            var ringRadius = Math.sqrt(radius * radius - y * y);
+            var ring = new THREE.Mesh(
+              new THREE.TorusGeometry(ringRadius, 0.035, 5, 96),
+              frameMaterial
+            );
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = y;
+            group.add(ring);
+          }
+
+          this.el.setObject3D('mesh', group);
+        }
+      });
+
+      AFRAME.registerComponent('mine-exit', {
+        init: function () {
+          this.started = false;
+          this.walking = false;
+          this.el.sceneEl.querySelector('#garden-set').setAttribute('visible', false);
+          this.el.sceneEl.querySelector('#garden-dome').setAttribute('visible', false);
+          this.onClick = function (event) {
+            if (!event.isTrusted && !(event.detail && event.detail.cursorEl)) {
+              return;
+            }
+            this.walkThrough();
+          }.bind(this);
+          this.el.addEventListener('click', this.onClick);
+        },
+
+        walkThrough: function () {
+          if (this.started) {
+            return;
+          }
+          this.started = true;
+          this.el.classList.remove('clickable');
+          var gardenSet = this.el.sceneEl.querySelector('#garden-set');
+          gardenSet.querySelectorAll('[dialogue-trigger]').forEach(function (entity) {
+            var dialogue = entity.components['dialogue-trigger'];
+            if (dialogue) {
+              dialogue.hide();
+              dialogue.suspended = true;
+            }
+          });
+          gardenSet.setAttribute('visible', true);
+          this.el.sceneEl.querySelector('#garden-dome').setAttribute('visible', true);
+          this.viewer = this.el.sceneEl.querySelector('#viewer');
+          this.viewer.removeAttribute('animation__cave-dive');
+          this.viewer.removeAttribute('animation__cave-turn');
+          this.walkStart = this.viewer.object3D.position.clone();
+          this.startRotation = this.viewer.object3D.rotation.clone();
+          this.walkPath = new THREE.CatmullRomCurve3([
+            this.walkStart,
+            new THREE.Vector3(1.35, 0, -11.2),
+            new THREE.Vector3(2.2, 0, -17),
+            new THREE.Vector3(3.4, 0, -23.3),
+            new THREE.Vector3(3.4, 0, -26),
+            new THREE.Vector3(3.4, 0, -28.5),
+            new THREE.Vector3(3.2, 0, -30),
+            new THREE.Vector3(2.2, 0, -31.4),
+            new THREE.Vector3(0, 0, -32.5),
+            new THREE.Vector3(0, 0, -35),
+            new THREE.Vector3(0, 0, -48)
+          ], false, 'centripetal');
+          this.walkElapsed = 0;
+          this.walkDuration = 10000;
+          this.walking = true;
+        },
+
+        tick: function (time, delta) {
+          if (!this.walking) {
+            return;
+          }
+          this.walkElapsed = Math.min(this.walkElapsed + delta, this.walkDuration);
+          var progress = this.walkElapsed / this.walkDuration;
+          var easedProgress = progress * progress * (3 - 2 * progress);
+          var pathPosition = this.walkPath.getPointAt(easedProgress);
+          var direction;
+          if (easedProgress > 0.998) {
+            direction = pathPosition.clone()
+              .sub(this.walkPath.getPointAt(Math.max(easedProgress - 0.002, 0)));
+          } else {
+            direction = this.walkPath.getPointAt(easedProgress + 0.002)
+              .sub(pathPosition);
+          }
+          direction.normalize();
+          var targetYaw = Math.atan2(-direction.x, -direction.z);
+          var startYaw = this.startRotation.y;
+          var yawDelta = Math.atan2(
+            Math.sin(targetYaw - startYaw),
+            Math.cos(targetYaw - startYaw)
+          );
+          var turnIn = Math.min(progress / 0.06, 1);
+          var easedTurnIn = turnIn * turnIn * (3 - 2 * turnIn);
+
+          this.viewer.object3D.position.copy(pathPosition);
+          this.viewer.object3D.rotation.y = startYaw + yawDelta * easedTurnIn;
+
+          if (progress >= 1) {
+            this.walking = false;
+            this.finishTransition();
+          }
+        },
+
+        finishTransition: function () {
+          this.walking = false;
+          var scene = this.el.sceneEl;
+          var gardenSet = scene.querySelector('#garden-set');
+          gardenSet.querySelectorAll('[dialogue-trigger]').forEach(function (entity) {
+            var dialogue = entity.components['dialogue-trigger'];
+            if (dialogue) {
+              dialogue.hide();
+              dialogue.suspended = false;
+            }
+          });
+        }
+      });
+
+      AFRAME.registerComponent('stl-ring', {
+        schema: {src: {type: 'string'}},
+
+        init: function () {
+          this.spinning = true;
+          this.transitionStarted = false;
+          this.alignmentStarted = false;
+          this.baseY = this.el.object3D.position.y;
+          this.el.addEventListener('click', this.alignAndEnter.bind(this));
+
+          fetch(this.data.src)
+            .then(function (response) {
+              if (!response.ok) {
+                throw new Error('Unable to load ring model: ' + response.status);
+              }
+              return response.arrayBuffer();
+            })
+            .then(this.addModel.bind(this))
+            .catch(function (error) {
+              console.error(error);
+            });
+        },
+
+        addModel: function (buffer) {
+          var view = new DataView(buffer);
+          var triangleCount = view.getUint32(80, true);
+          var positions = new Float32Array(triangleCount * 9);
+          var normals = new Float32Array(triangleCount * 9);
+          var colors = new Float32Array(triangleCount * 9);
+          var offset = 84;
+
+          if (buffer.byteLength < offset + triangleCount * 50) {
+            throw new Error('Ring model is not a valid binary STL file.');
+          }
+
+          for (var triangle = 0; triangle < triangleCount; triangle++) {
+            var normal = [
+              view.getFloat32(offset, true),
+              view.getFloat32(offset + 4, true),
+              view.getFloat32(offset + 8, true)
+            ];
+            offset += 12;
+            var centerX = 0;
+            var centerY = 0;
+            var centerZ = 0;
+
+            for (var vertex = 0; vertex < 3; vertex++) {
+              var index = triangle * 9 + vertex * 3;
+              positions[index] = view.getFloat32(offset, true);
+              positions[index + 1] = view.getFloat32(offset + 4, true);
+              positions[index + 2] = view.getFloat32(offset + 8, true);
+              centerX += positions[index] / 3;
+              centerY += positions[index + 1] / 3;
+              centerZ += positions[index + 2] / 3;
+              normals.set(normal, index);
+              offset += 12;
+            }
+            var angle = Math.atan2(centerZ, centerX);
+            var band = 0.5 + 0.5 * Math.sin(angle * 9 + centerY * 7);
+            var color = new THREE.Color('#190d20')
+              .lerp(new THREE.Color('#9c2047'), 0.45 + band * 0.42);
+            color.lerp(new THREE.Color('#ff7550'), THREE.MathUtils.smoothstep(band, 0.7, 1) * 0.7);
+            color.lerp(new THREE.Color('#ffc36b'),
+              THREE.MathUtils.smoothstep(Math.abs(normal[1]), 0.72, 0.98) * band * 0.55);
+            if (band < 0.16) {
+              color.lerp(new THREE.Color('#29d5e8'), (0.16 - band) * 2.5);
+            }
+            for (var colorVertex = 0; colorVertex < 3; colorVertex++) {
+              colors.set([color.r, color.g, color.b], triangle * 9 + colorVertex * 3);
+            }
+            offset += 2;
+          }
+
+          var geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+          geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+          geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+          geometry.computeBoundingBox();
+
+          var bounds = geometry.boundingBox;
+          var center = new THREE.Vector3();
+          var size = new THREE.Vector3();
+          bounds.getCenter(center);
+          bounds.getSize(size);
+          geometry.translate(-center.x, -center.y, -center.z);
+          var scale = 2.4 / Math.max(size.x, size.y, size.z);
+          geometry.scale(scale, scale, scale);
+          geometry.rotateX(Math.PI / 2);
+          geometry.computeBoundingSphere();
+
+          var material = new THREE.MeshStandardMaterial({
+            color: '#ffffff',
+            vertexColors: true,
+            metalness: 0.68,
+            roughness: 0.3,
+            emissive: '#310716',
+            emissiveIntensity: 0.22
+          });
+          var ringMesh = new THREE.Mesh(geometry, material);
+          ringMesh.castShadow = true;
+          ringMesh.receiveShadow = true;
+          this.el.setObject3D('mesh', ringMesh);
+        },
+
+        alignAndEnter: function () {
+          if (this.transitionStarted || this.alignmentStarted) {
+            return;
+          }
+          this.alignmentStarted = true;
+          this.spinning = false;
+          this.alignmentStart = this.el.object3D.rotation.y;
+          this.alignmentTarget = Math.round(this.alignmentStart / (Math.PI * 2)) * Math.PI * 2;
+          this.alignmentElapsed = 0;
+        },
+
+        enterCave: function () {
+          this.transitionStarted = true;
+          var scene = this.el.sceneEl;
+          this.transitionElapsed = 0;
+          this.travelDuration = 5000;
+          var uncleDialogue = scene.querySelector('#miner').components['dialogue-trigger'];
+          uncleDialogue.hide();
+          scene.querySelector('#garden-set').setAttribute('visible', false);
+          scene.querySelector('#garden-dome').setAttribute('visible', false);
+          var caveSet = scene.querySelector('#cave-set');
+          caveSet.setAttribute('scale', '0.01 0.01 0.01');
+          caveSet.setAttribute('visible', true);
+          caveSet.setAttribute('animation__emerge', {
+            property: 'scale',
+            to: '1 1 1',
+            dur: this.travelDuration,
+            easing: 'easeOutCubic'
+          });
+          scene.querySelector('#cave-lighting').setAttribute('visible', true);
+          scene.querySelector('#viewer').setAttribute('animation__cave-dive', {
+            property: 'position',
+            to: '0 0 -6',
+            dur: this.travelDuration,
+            easing: 'easeInOutSine'
+          });
+          scene.querySelector('#viewer').setAttribute('animation__cave-turn', {
+            property: 'rotation',
+            to: '-6 -15 0',
+            dur: this.travelDuration,
+            easing: 'easeInOutSine'
+          });
+        },
+
+        tick: function (time, delta) {
+          if (this.transitionStarted && !this.travelFinished) {
+            this.transitionElapsed += delta;
+            if (this.transitionElapsed >= this.travelDuration) {
+              var scene = this.el.sceneEl;
+              scene.querySelector('[stl-ring]').setAttribute('visible', false);
+              scene.querySelector('#ring-label').setAttribute('visible', false);
+              this.travelFinished = true;
+            }
+            return;
+          }
+          if (!this.el.getObject3D('mesh')) {
+            return;
+          }
+          if (this.spinning) {
+            this.el.object3D.rotation.y += delta * 0.0003;
+            this.el.object3D.position.y = this.baseY + Math.sin(time * 0.001) * 0.12;
+          } else if (this.alignmentStarted && !this.transitionStarted) {
+            this.alignmentElapsed = Math.min(this.alignmentElapsed + delta, 1600);
+            var progress = this.alignmentElapsed / 1600;
+            var easedProgress = 0.5 - Math.cos(progress * Math.PI) / 2;
+            this.el.object3D.rotation.y = this.alignmentStart +
+              (this.alignmentTarget - this.alignmentStart) * easedProgress;
+
+            if (progress === 1) {
+              this.el.object3D.rotation.y = this.alignmentTarget;
+              this.enterCave();
+            }
+          }
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <a-scene
+      background="color: #050611"
+      renderer="colorManagement: true; shadowMapEnabled: true; shadowMapType: pcfsoft; toneMapping: ACESFilmic; exposure: 1.12"
+      vr-mode-ui="enabled: true">
+      <a-assets>
+        <img id="space-panorama" src="assets/space-panorama.jpg">
+        <a-asset-item id="mine-magic-crystal-model" src="assets/mine-magic-crystal.glb"></a-asset-item>
+        <a-asset-item id="mine-ore-crystals-model" src="assets/mine-ore-crystals.glb"></a-asset-item>
+      </a-assets>
+
+      <a-sky id="space-sky" src="#space-panorama" rotation="0 -90 0"></a-sky>
+      <a-entity id="cave-set" visible="false">
+        <a-entity cave-shell scale="12 12 16" position="0 1.6 -8"></a-entity>
+        <a-entity cave-formations></a-entity>
+        <a-plane
+          rotation="-90 0 0"
+          width="24"
+          height="40"
+          position="0 -0.2 -15"
+          material="color: #211a17; roughness: 1; metalness: 0">
+        </a-plane>
+        <a-entity cave-rock position="-5 4 -9" scale="3.5 2.5 3"></a-entity>
+        <a-entity cave-rock position="4.8 4.5 -10" scale="3 3.2 3.4"></a-entity>
+        <a-entity cave-rock position="-6 0.9 -11" scale="2.5 2.2 3"></a-entity>
+        <a-entity cave-rock position="5.8 1.1 -12" scale="2.7 2.5 3.3"></a-entity>
+        <a-entity cave-rock position="-3 6.4 -12" scale="3.4 1.8 3"></a-entity>
+        <a-entity cave-rock position="3.5 6.1 -9" scale="3 2 3.2"></a-entity>
+        <a-entity cave-rock position="0 0.1 -15" scale="4 1.2 2.5"></a-entity>
+        <a-entity gltf-model="#mine-ore-crystals-model" cave-ore-material position="-7.5 0.2 -17" scale="0.75 0.75 0.75"></a-entity>
+        <a-entity gltf-model="#mine-ore-crystals-model" cave-ore-material position="7.5 0.2 -17" scale="0.75 0.75 0.75"></a-entity>
+        <a-entity
+          class="clickable dialogue-hitbox"
+          haemanthus-hover="title: Helium 3; bubbleY: 0.8; message: Helium-3. The most precious thing beneath our feet. Every ounce we pull from these mines brings humanity one step closer to making Mars a home. That's what we're told, anyway. Funny how something so valuable never seems to make life down here any easier."
+          gltf-model="#mine-magic-crystal-model"
+          position="-5.8 1.2 -15.5"
+          rotation="0 18 0"
+          scale="1.6 1.6 1.6">
+        </a-entity>
+        <a-entity
+          class="clickable dialogue-hitbox"
+          haemanthus-hover="title: Helium 3; bubbleY: 0.8; bubbleZ: -1.2; message: Helium-3. The most precious thing beneath our feet. Every ounce we pull from these mines brings humanity one step closer to making Mars a home. That's what we're told, anyway. Funny how something so valuable never seems to make life down here any easier."
+          gltf-model="#mine-magic-crystal-model"
+          position="5.8 1.2 -18"
+          rotation="0 146 0"
+          scale="1.5 1.5 1.5">
+        </a-entity>
+        <a-entity
+          light="type: point; color: #72dcff; intensity: 1.4; distance: 8; decay: 2"
+          position="-5.8 2.6 -15.5">
+        </a-entity>
+        <a-entity
+          light="type: point; color: #a585ff; intensity: 1.2; distance: 8; decay: 2"
+          position="5.8 2.6 -18">
+        </a-entity>
+        <a-entity mine-hallway></a-entity>
+        <a-entity cave-exit-seal position="3.4 1.7 -22.85"></a-entity>
+        <a-circle
+          id="cave-exit-dark"
+          position="3.4 1.7 -23.6"
+          radius="1.9"
+          material="shader: flat; color: #030205; transparent: true; opacity: 0.9; side: double; depthTest: false; depthWrite: false">
+        </a-circle>
+        <a-text
+          id="exit-label"
+          value="MEET EO"
+          position="3.4 4.1 -23.4"
+          align="center"
+          width="5.8"
+          font="https://cdn.aframe.io/fonts/Exo2Bold.fnt"
+          color="#ffd28a"
+          material="emissive: #ff8a36; emissiveIntensity: 0.35">
+        </a-text>
+        <a-entity
+          id="mine-exit"
+          mine-exit
+          class="clickable"
+          position="3.4 1.7 -23.3"
+          geometry="primitive: plane; width: 3.5; height: 4.2"
+          material="color: #ffffff; transparent: true; opacity: 0.01; side: double">
+        </a-entity>
+
+        <a-entity
+        id="miner"
+        position="-1.5 0 -11"
+        dialogue-trigger="speaker: UNCLE NAROL; bubbleZ: 1.2; message: Keep those drills moving, lads! We've got a quota to meet, and Mars isn't going to terraform itself. Remember, every ounce of helium we pull from this rock brings us one step closer to a better world. Now quit dawdling and get back to work!"
+        >
+          <a-entity
+            class="clickable dialogue-hitbox"
+            obj-character="src: assets/uncle-narol-textured/model.obj; palette: uncle"
+            scale="1.25 1.25 1.25">
+          </a-entity>
+          <a-entity
+            light="type: spot; color: #c9efff; intensity: 3.8; distance: 15; angle: 40; penumbra: 0.62; decay: 2"
+            position="0 2.05 0.4"
+            rotation="-8 180 0">
+          </a-entity>
+          <a-entity visible="false">
+          <a-cylinder position="0 1.16 0" radius="0.29" height="0.62" color="#25282a" metalness="0.8" roughness="0.38"></a-cylinder>
+          <a-box position="0 1.2 0.04" width="0.62" height="0.42" depth="0.34" color="#394249" metalness="0.7" roughness="0.48"></a-box>
+          <a-box position="0 1.19 0.225" width="0.31" height="0.22" depth="0.035" color="#b76e2a" metalness="0.55" roughness="0.38"></a-box>
+          <a-box position="0 1.2 0.249" width="0.08" height="0.16" depth="0.02" color="#e1ae62" metalness="0.68" roughness="0.34"></a-box>
+          <a-sphere position="0 1.76 0" radius="0.22" color="#b78367" roughness="0.82"></a-sphere>
+          <a-sphere position="0 1.58 0.17" radius="0.18" scale="1 1.15 0.62" color="#d1d1c5" roughness="0.96"></a-sphere>
+          <a-cone position="0 1.39 0.18" radius-bottom="0.12" radius-top="0.035" height="0.4" color="#c0c2b9" roughness="0.94"></a-cone>
+          <a-sphere position="-0.18 1.76 -0.02" radius="0.1" scale="0.45 0.65 0.55" color="#a8a99f" roughness="0.94"></a-sphere>
+          <a-sphere position="0.18 1.76 -0.02" radius="0.1" scale="0.45 0.65 0.55" color="#a8a99f" roughness="0.94"></a-sphere>
+          <a-sphere position="0 1.88 0" radius="0.3" scale="1.2 0.75 1.15" color="#bf812a" metalness="0.5" roughness="0.46"></a-sphere>
+          <a-cylinder position="0 1.99 0" radius="0.29" height="0.1" color="#d49432" metalness="0.55" roughness="0.42"></a-cylinder>
+          <a-cylinder position="0 1.92 0.05" radius="0.36" height="0.06" color="#c8872d" metalness="0.55" roughness="0.4"></a-cylinder>
+          <a-torus position="0 2.01 0.03" radius="0.085" radius-tubular="0.026" color="#e0b15f" material="metalness: 0.6; roughness: 0.35"></a-torus>
+          <a-sphere position="0 2.01 0.07" radius="0.055" color="#ddf5ff" emissive="#71cbe6" emissive-intensity="1.7"></a-sphere>
+          <a-box position="0 1.79 0.22" width="0.3" height="0.13" depth="0.04" color="#252b30" metalness="0.72" roughness="0.27"></a-box>
+          <a-sphere position="-0.08 1.79 0.245" radius="0.042" color="#82c7d8" metalness="0.35" roughness="0.22"></a-sphere>
+          <a-sphere position="0.08 1.79 0.245" radius="0.042" color="#82c7d8" metalness="0.35" roughness="0.22"></a-sphere>
+          <a-sphere position="0 2.02 0.29" radius="0.075" color="#fff0b0" emissive="#ffb629" emissive-intensity="2"></a-sphere>
+          <a-sphere position="-0.08 1.79 0.1" radius="0.018" color="#493a32"></a-sphere>
+          <a-sphere position="0.08 1.79 0.1" radius="0.018" color="#493a32"></a-sphere>
+          <a-cylinder position="-0.39 1.18 0" rotation="0 0 -12" radius="0.105" height="0.64" color="#454c50" metalness="0.72" roughness="0.42"></a-cylinder>
+          <a-cylinder position="0.39 1.18 0" rotation="0 0 12" radius="0.105" height="0.64" color="#454c50" metalness="0.72" roughness="0.42"></a-cylinder>
+          <a-sphere position="-0.4 0.83 0.04" radius="0.12" color="#a85d26" metalness="0.46"></a-sphere>
+          <a-sphere position="0.4 0.83 0.04" radius="0.12" color="#a85d26" metalness="0.46"></a-sphere>
+          <a-cylinder position="-0.17 0.51 0" radius="0.12" height="0.55" color="#343b40" metalness="0.72" roughness="0.48"></a-cylinder>
+          <a-cylinder position="0.17 0.51 0" radius="0.12" height="0.55" color="#343b40" metalness="0.72" roughness="0.48"></a-cylinder>
+          <a-box position="-0.17 0.19 0.08" width="0.24" height="0.18" depth="0.38" color="#20252a" metalness="0.65"></a-box>
+          <a-box position="0.17 0.19 0.08" width="0.24" height="0.18" depth="0.38" color="#20252a" metalness="0.65"></a-box>
+          <a-cylinder position="0.58 1.01 0.14" rotation="0 0 -35" radius="0.035" height="0.8" color="#55402b" metalness="0.4"></a-cylinder>
+          <a-box position="0.8 1.4 0.14" rotation="0 0 -18" width="0.42" height="0.11" depth="0.09" color="#b7c1c3" metalness="0.85" roughness="0.3"></a-box>
+          <a-entity light="type: spot; color: #c9efff; intensity: 3.8; distance: 15; angle: 40; penumbra: 0.62; decay: 2" position="0 2.05 0.4" rotation="-8 180 0"></a-entity>
+          </a-entity>
+        </a-entity>
+      </a-entity>
+      <a-entity id="garden-set" emporium-lighting visible="false">
+        <a-entity id="garden-dome" glass-dome position="0 0 -58" visible="false"></a-entity>
+        <a-plane
+          position="0 -0.12 -58"
+          rotation="-90 0 0"
+          width="38"
+          height="40"
+          shadow="receive: true"
+          material="color: #315d36; roughness: 1">
+        </a-plane>
+        <a-entity grass-field position="0 -0.1 -58"></a-entity>
+        <a-entity garden-tree position="-8 0 -54" scale="1.25 1.2 1.25"></a-entity>
+        <a-entity garden-tree position="8 0 -55" scale="1.45 1.35 1.45"></a-entity>
+        <a-entity garden-tree position="-6 0 -63" scale="1.1 1.15 1.1"></a-entity>
+        <a-entity garden-tree position="6 0 -64" scale="1.2 1.25 1.2"></a-entity>
+        <a-entity garden-tree position="0 0 -67" scale="1.55 1.5 1.5"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="-7 0 -52" scale="1.1 1.1 1.1"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="-5 0 -55" scale="0.95 0.95 0.95"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="-3 0 -53" scale="1.05 1.05 1.05"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="-1.5 0 -57" scale="0.9 0.9 0.9"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="2 0 -55" scale="1.35 1.35 1.35"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="4 0 -53" scale="0.98 0.98 0.98"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="6 0 -56" scale="1.12 1.12 1.12"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="8 0 -52" scale="0.92 0.92 0.92"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="-9 0 -60" scale="1.02 1.02 1.02"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="-6 0 -62" scale="0.94 0.94 0.94"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="-3 0 -60" scale="1.08 1.08 1.08"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="1 0 -62" scale="0.96 0.96 0.96"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="4 0 -60" scale="1.1 1.1 1.1"></a-entity>
+        <a-entity class="clickable dialogue-hitbox" haemanthus-hover obj-character="src: assets/haemanthus-textured/model.obj; palette: haemanthus" position="8 0 -61" scale="0.98 0.98 0.98"></a-entity>
+        <a-entity
+          id="eo"
+          obj-character="src: assets/eo-textured/model.obj; palette: eo"
+          scale="1.3 1.3 1.3"
+          dialogue-trigger="speaker: EO; dream: true; message: Do you ever wonder what it would be like to see the stars without a ceiling above us? To feel the sun on our faces, not just hear stories about it? I don't want to spend my whole life dreaming about a world I'll never see, Darrow. I want to live in it."
+          position="0 0 -52">
+          <a-entity
+            class="clickable dialogue-hitbox"
+            geometry="primitive: box; width: 1.1; height: 2.3; depth: 0.8"
+            material="color: #ffffff; transparent: true; opacity: 0.01; side: double">
+          </a-entity>
+          <a-entity
+            light="type: spot; color: #ffe2c1; intensity: 1.7; distance: 10; angle: 52; penumbra: 0.88; decay: 2; target: #eo-light-target"
+            position="0 2.3 0.9"
+            rotation="0 0 0">
+          </a-entity>
+          <a-entity
+            light="type: point; color: #f7a58d; intensity: 0.12; distance: 5; decay: 2"
+            position="0 1.25 1">
+          </a-entity>
+          <a-entity
+            light="type: spot; color: #8bb9ff; intensity: 0.65; distance: 8; angle: 48; penumbra: 0.88; decay: 2; target: #eo-light-target"
+            position="0 2.2 -0.8">
+          </a-entity>
+          <a-entity id="eo-light-target" position="0 1.1 0" visible="false"></a-entity>
+        </a-entity>
+        <a-entity light="type: hemisphere; color: #d7d2c4; groundColor: #625847; intensity: 0.58"></a-entity>
+        <a-entity light="type: ambient; color: #b9b8ad; intensity: 0.12"></a-entity>
+        <a-entity
+          light="type: directional; color: #ffe3c1; intensity: 1.15; target: #eo-light-target; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraLeft: -12; shadowCameraRight: 12; shadowCameraTop: 12; shadowCameraBottom: -12; shadowCameraNear: 0.1; shadowCameraFar: 35; shadowRadius: 4"
+          position="-7 11 -46">
+        </a-entity>
+        <a-entity
+          light="type: point; color: #8cc8ff; intensity: 0.3; distance: 24; decay: 2"
+          position="0 7 -58">
+        </a-entity>
+      </a-entity>
+      <a-entity id="mars-sky" mars-sky visible="false"></a-entity>
+      <a-entity id="mars-set" mars-world visible="false">
+        <a-entity light="type: hemisphere; color: #b7c8e0; groundColor: #5e6946; intensity: 0.62"></a-entity>
+        <a-entity light="type: ambient; color: #7588b4; intensity: 0.12"></a-entity>
+        <a-entity
+          light="type: directional; color: #ffe2af; intensity: 0.72; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraLeft: -70; shadowCameraRight: 70; shadowCameraTop: 70; shadowCameraBottom: -70; shadowCameraNear: 0.1; shadowCameraFar: 300; shadowRadius: 4"
+          position="-18 28 -55">
+        </a-entity>
+        <a-entity mars-buildings></a-entity>
+        <a-entity surface-trees></a-entity>
+        <a-entity
+          id="surface-man"
+          surface-man
+          dialogue-trigger="speaker: DANCER; message: Look at it. All this time, we've been told we're digging toward a better world. A world waiting for our children. But what if I told you there's more to this place than they've ever let us believe? Just look around. Tell me, does this look like a world that needs saving?"
+          position="-2.7 0 -6">
+          <a-entity
+            class="clickable dialogue-hitbox"
+            position="0 1.2 0"
+            geometry="primitive: box; width: 1.2; height: 2.5; depth: 0.9"
+            material="color: #ffffff; transparent: true; opacity: 0.01; side: double">
+          </a-entity>
+        </a-entity>
+      </a-entity>
+      <a-entity id="world" dream-transition></a-entity>
+      <a-entity light="type: hemisphere; color: #8998c4; groundColor: #302b3c; intensity: 0.48"></a-entity>
+      <a-entity light="type: ambient; color: #596073; intensity: 0.12"></a-entity>
+      <a-entity
+        light="type: point; color: #ff1028; intensity: 2.5; distance: 9; decay: 2"
+        id="ring-glow"
+        position="0 2.5 -3.5">
+      </a-entity>
+      <a-entity light="type: point; color: #ffae58; intensity: 1.1; distance: 5; decay: 2" position="-1.7 2.2 -3.4"></a-entity>
+      <a-entity light="type: point; color: #8d5cff; intensity: 0.9; distance: 5; decay: 2" position="1.7 1.1 -3.1"></a-entity>
+      <a-entity id="cave-lighting" visible="false">
+        <a-entity light="type: ambient; color: #746b66; intensity: 0.18"></a-entity>
+        <a-entity light="type: hemisphere; color: #8f827b; groundColor: #241713; intensity: 0.34"></a-entity>
+        <a-entity
+          light="type: point; color: #ff3b18; intensity: 2.2; distance: 20; decay: 2"
+          position="0 3 -8">
+        </a-entity>
+        <a-entity
+          light="type: point; color: #9eff91; intensity: 2.1; distance: 10; decay: 2"
+          position="0 2 -26">
+        </a-entity>
+        <a-entity
+          light="type: point; color: #ffc078; intensity: 2.3; distance: 14; decay: 2"
+          position="0 2.3 -11">
+        </a-entity>
+      </a-entity>
+      <a-entity
+        stl-ring="src: assets/ornamental__ring.stl"
+        position="0 1.6 -3"
+        class="clickable">
+      </a-entity>
+      <a-text
+        id="ring-label"
+        value="ENTER THE MINE"
+        position="0 3.25 -3"
+        align="center"
+        width="4.8"
+        font="https://cdn.aframe.io/fonts/Exo2Bold.fnt"
+        color="#ffd28a"
+        material="emissive: #ff8a36; emissiveIntensity: 0.3">
+      </a-text>
+      <a-entity id="viewer" position="0 0 0">
+        <a-entity camera look-controls position="0 1.6 0">
+          <a-entity
+            cursor="fuse: false"
+            raycaster="objects: .clickable"
+            position="0 0 -1">
+          </a-entity>
+          <a-plane
+            id="transition-curtain"
+            visible="false"
+            position="0 0 -0.75"
+            width="3"
+            height="3"
+            material="color: #000000; transparent: true; opacity: 0; side: double; depthWrite: false">
+          </a-plane>
+        </a-entity>
+      </a-entity>
+      <a-entity
+        laser-controls="hand: left"
+        cursor="rayOrigin: entity; fuse: false"
+        raycaster="objects: .clickable">
+      </a-entity>
+      <a-entity
+        laser-controls="hand: right"
+        cursor="rayOrigin: entity; fuse: false"
+        raycaster="objects: .clickable">
+      </a-entity>
+      <a-entity
+        cursor="rayOrigin: mouse"
+        raycaster="objects: .clickable">
+      </a-entity>
+    </a-scene>
+  </body>
+</html>
